@@ -1,0 +1,266 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ROSAIA LEGO · Guida operativa</title>
+  <style>
+    :root { --bg:#0b1020; --panel:#121a2d; --ink:#e9eef8; --muted:#9da9bd;
+      --line:#26324a; --blue:#65b8ff; --green:#63d6a0; --amber:#ffc66d;
+      --red:#ff7c89; --code:#080d18; }
+    * { box-sizing:border-box; }
+    html { scroll-behavior:smooth; }
+    body { margin:0; color:var(--ink); background:var(--bg); font:16px/1.55 system-ui,sans-serif; }
+    header { padding:54px max(24px,calc((100vw - 1180px)/2)); border-bottom:1px solid var(--line);
+      background:radial-gradient(circle at 85% 0,#173c61 0,transparent 37%); }
+    header p { max-width:760px; color:var(--muted); }
+    h1 { margin:0 0 8px; font-size:clamp(2rem,5vw,4rem); line-height:1; }
+    h2 { margin:48px 0 16px; border-bottom:1px solid var(--line); padding-bottom:8px; }
+    h3 { margin:24px 0 8px; }
+    nav { position:sticky; top:0; z-index:2; display:flex; gap:18px; overflow:auto;
+      padding:12px max(24px,calc((100vw - 1180px)/2)); background:#0b1020eb;
+      backdrop-filter:blur(10px); border-bottom:1px solid var(--line); }
+    nav a { color:var(--muted); text-decoration:none; white-space:nowrap; }
+    nav a:hover { color:var(--blue); }
+    main { max-width:1180px; margin:auto; padding:0 24px 80px; }
+    .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:14px; }
+    .card { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:18px; }
+    .card h3 { margin-top:0; }
+    .tag { display:inline-block; border:1px solid var(--line); border-radius:999px;
+      padding:2px 9px; font-size:.82rem; color:var(--muted); }
+    .ok { color:var(--green); } .pending { color:var(--amber); } .blocked { color:var(--red); }
+    .callout { border-left:4px solid var(--blue); padding:10px 16px; background:var(--panel); }
+    pre { position:relative; margin:10px 0 18px; padding:16px 54px 16px 16px;
+      overflow:auto; border:1px solid var(--line); border-radius:9px; background:var(--code); }
+    code { font-family:ui-monospace,SFMono-Regular,Consolas,monospace; font-size:.9rem; }
+    .copy { position:absolute; right:8px; top:8px; border:1px solid var(--line); border-radius:6px;
+      color:var(--ink); background:var(--panel); cursor:pointer; padding:5px 9px; }
+    table { width:100%; border-collapse:collapse; display:block; overflow-x:auto; }
+    th,td { padding:10px 12px; border-bottom:1px solid var(--line); text-align:left; vertical-align:top; }
+    th { color:var(--blue); }
+    li { margin:.35rem 0; }
+    kbd { border:1px solid var(--line); border-bottom-width:2px; border-radius:4px; padding:1px 5px; }
+    footer { color:var(--muted); border-top:1px solid var(--line); padding-top:20px; margin-top:56px; }
+  </style>
+</head>
+<body>
+<header>
+  <span class="tag">ROS 2 Jazzy · Bluno · RealSense RGB-D ArUco</span>
+  <h1>ROSAIA LEGO</h1>
+  <p>Guida operativa per bring-up, calibrazione, acquisizione dati, debugging,
+    visualizzazione e futura identificazione del Jacobiano dei due bracci deformabili.</p>
+</header>
+<nav>
+  <a href="#stato">Stato</a><a href="#setup">Setup</a><a href="#avvio">Avvio</a>
+  <a href="#calibrazione">Calibrazione</a><a href="#recording">Recording</a>
+  <a href="#debug">Debug</a><a href="#training">Training</a><a href="#stop">Stop</a>
+</nav>
+<main>
+  <section id="stato">
+    <h2>Stato dell’implementazione</h2>
+    <div class="grid">
+      <div class="card"><h3 class="ok">Pronto</h3><p>Firmware a due assi, watchdog,
+        encoder D2–D3 e D11–D12, telemetria ADC, bridge seriale ROS.</p></div>
+      <div class="card"><h3 class="ok">Pronto</h3><p>Detection ArUco RGB-D,
+        deproiezione metrica 3D e stato filtrato dei tre marker per braccio.</p></div>
+      <div class="card"><h3 class="ok">Pronto</h3><p>Recorder sincronizzato CSV:
+        stream motore completo più campioni visuali.</p></div>
+      <div class="card"><h3 class="pending">Da calibrare</h3><p>Home/range dei due assi,
+        sensori di corrente, velocità/PWM, mapping fisico definitivo dei marker e timing.</p></div>
+      <div class="card"><h3 class="ok">Pronto offline</h3><p>Profili gradino/Fourier,
+        training MLP, export NPZ e publisher del Jacobiano analitico.</p></div>
+      <div class="card"><h3 class="pending">Da implementare</h3><p>Allineamento temporale
+        definitivo, report dataset, replay e loop di velocità encoder.</p></div>
+      <div class="card"><h3 class="pending">Solo riferimento</h3><p>Il controller visuale
+        produce <code>q̇_ref</code>; non comanda ancora PWM.</p></div>
+    </div>
+  </section>
+
+  <section id="setup">
+    <h2>Setup e build</h2>
+    <p>Eseguire dalla root della repository. Lo script sorgenta automaticamente ROS e workspace.</p>
+    <pre><code>cd /home/abajrami-iit.local/Desktop/rosaia-lego
+scripts/rosaia.sh build
+scripts/rosaia.sh test</code></pre>
+    <h3>Verifica dispositivi e grafo ROS</h3>
+    <pre><code>scripts/rosaia.sh status</code></pre>
+    <p>La configurazione corrente attende la Bluno su
+      <code>/dev/serial/by-id/usb-2341_0043-if00</code> e la RealSense D435 con
+      seriale <code>152122077644</code>. Il tracker usa librealsense e non dipende
+      dal numero variabile di <code>/dev/video*</code>:</p>
+    <pre><code>rs-enumerate-devices -s
+ls -l /dev/serial/by-id/</code></pre>
+    <div class="callout">Un solo processo deve possedere la seriale Bluno. Non avviare
+      contemporaneamente bridge ROS e script Python diretti su <code>/dev/ttyACM0</code>.</div>
+  </section>
+
+  <section id="avvio">
+    <h2>Avvio per terminali</h2>
+    <table>
+      <thead><tr><th>Terminale</th><th>Comando</th><th>Funzione</th></tr></thead>
+      <tbody>
+        <tr><td>T1</td><td><code>scripts/rosaia.sh bridge</code></td><td>Seriale, encoder, ADC e comandi motore.</td></tr>
+        <tr><td>T2</td><td><code>scripts/rosaia.sh vision</code></td><td>Camera e detection dei marker.</td></tr>
+        <tr><td>T3</td><td><code>scripts/rosaia.sh recorder calibrazione_01</code></td><td>Dataset CSV; avviare prima del moto.</td></tr>
+        <tr><td>T4</td><td><code>scripts/rosaia.sh view</code></td><td>Immagine annotata, se rqt_image_view è installato.</td></tr>
+      </tbody>
+    </table>
+    <p>Per la preview RGB diretta, senza ROS:</p>
+    <pre><code>scripts/rosaia.sh preview</code></pre>
+    <p>Il viewer ROS non è attualmente installato sulla macchina. Installazione richiesta:</p>
+    <pre><code>sudo apt install ros-jazzy-rqt-image-view</code></pre>
+  </section>
+
+  <section id="calibrazione">
+    <h2>Sequenza di calibrazione prima del training</h2>
+    <ol>
+      <li><strong>Visione:</strong> confermare ID base/mobili e ordine fisico; misurare rumore
+        a bracci fermi, detection rate e zona di lavoro visibile.</li>
+      <li><strong>Encoder e cinematica:</strong> definire home ripetibile, segni, range utile,
+        conteggi/giro e rapporto di riduzione per entrambi gli assi.</li>
+      <li><strong>Corrente:</strong> acquisire offset ADC a ponte disabilitato, identificare
+        la variante ACS712 e validare la conversione in ampere.</li>
+      <li><strong>Attuazione:</strong> misurare breakaway, <code>q̇(PWM)</code> nei due versi,
+        isteresi e comportamento alla reversibilità con carico.</li>
+      <li><strong>Timing:</strong> misurare frequenze, jitter e offset camera–telemetria.</li>
+      <li><strong>Manifest:</strong> associare ogni sessione a firmware, Git revision,
+        camera, tensione, limite di corrente e configurazione marker.</li>
+    </ol>
+    <p>Creare il record della calibrazione dal template versionato:</p>
+    <pre><code>cp config/calibration_manifest.template.yaml \
+  config/calibration_YYYYMMDD.yaml</code></pre>
+    <h3>Controllo dei flussi durante la calibrazione</h3>
+    <pre><code>ros2 topic hz /motor_state
+ros2 topic hz /arm_1/aruco_state
+ros2 topic hz /arm_2/aruco_state
+ros2 topic echo /arm_1/aruco_points_3d_raw --once
+ros2 topic echo /bluno/status
+ros2 topic echo /aruco/status</code></pre>
+    <h3>Comando zero e comando manuale</h3>
+    <pre><code># Zero su entrambi gli assi
+scripts/rosaia.sh stop
+
+# Esempio di pubblicazione continua; sostituire i valori solo nel test previsto
+ros2 topic pub --rate 20 /motor_command std_msgs/msg/Int16MultiArray \
+  "{data: [0, 0]}"</code></pre>
+    <p>Interrompere la pubblicazione con <kbd>Ctrl</kbd>+<kbd>C</kbd>; bridge e firmware
+      applicano timeout indipendenti. I comandi sono ancora PWM signed, non velocità.</p>
+  </section>
+
+  <section id="recording">
+    <h2>Registrazione</h2>
+    <pre><code># T1: bridge
+scripts/rosaia.sh bridge
+
+# T2: detector
+scripts/rosaia.sh vision
+
+# T3: nuova sessione nominata
+scripts/rosaia.sh recorder arm1_range_slow_01</code></pre>
+    <p>Ogni sessione crea:</p>
+    <pre><code>data/sessions/arm1_range_slow_01/
+├── metadata.json
+├── telemetry.csv
+└── samples.csv</code></pre>
+    <ul>
+      <li><code>telemetry.csv</code>: ogni pacchetto STATE, adatto all’interpolazione temporale.</li>
+      <li><code>samples.csv</code>: una riga per braccio e frame ArUco completo.</li>
+      <li><code>metadata.json</code>: schema, mapping asse/braccio e parametri del recorder.</li>
+    </ul>
+    <p>Entrambi i CSV includono encoder, comando, ADC raw, corrente calibrata e flag
+      firmware. Finché l’ACS712 non è calibrato, gli ampere rimangono non disponibili
+      ma il valore ADC viene comunque conservato.</p>
+    <p>Chiudere con <kbd>Ctrl</kbd>+<kbd>C</kbd>; i file vengono flushati e chiusi. Le
+      sessioni non vengono sovrascritte: un nome già presente riceve un suffisso.</p>
+  </section>
+
+  <section id="debug">
+    <h2>Debugging e visualizzazione</h2>
+    <div class="grid">
+      <div class="card"><h3>Seriale</h3><pre><code>ros2 topic echo /motor_state
+ros2 topic echo /encoder_counts
+ros2 topic echo /motor_current</code></pre></div>
+      <div class="card"><h3>Marker</h3><pre><code>ros2 topic echo /aruco/status
+ros2 topic echo /arm_1/aruco_state
+ros2 topic hz /aruco/annotated/compressed</code></pre></div>
+      <div class="card"><h3>Grafo</h3><pre><code>ros2 node list
+ros2 topic list -t
+ros2 node info /bluno_motor_bridge</code></pre></div>
+      <div class="card"><h3>Firmware</h3><pre><code>.tools/arduino-cli compile \
+  --config-file .arduino-cli.yaml \
+  --fqbn arduino:avr:uno \
+  firmware/bluno_motor_controller</code></pre></div>
+    </div>
+    <p>I flag firmware sono bitmask: timeout <code>1</code>, comando malformato
+      <code>2</code>, motion lock <code>8</code>, scala corrente ignota <code>16</code>,
+      overflow RX <code>32</code>, limite posizione <code>64</code>.</p>
+  </section>
+
+  <section id="training">
+    <h2>Processo finale di training</h2>
+    <p>La pipeline concordata è incrementale e verificabile:</p>
+    <ol>
+      <li>interpolazione di <code>q</code> sui timestamp camera e quality filtering;</li>
+      <li>baseline locale robusta <code>ẋ = J(q)q̇</code> per segno e scala;</li>
+      <li>modello forward differenziabile <code>x̂=fθ(q)</code> e
+        <code>Ĵ=∂fθ/∂q</code>;</li>
+      <li>test contraction/extension a pari <code>q</code> per decidere se aggiungere
+        direzione o memoria al modello;</li>
+      <li>split per intere traiettorie/sessioni, mai shuffle casuale dei frame;</li>
+      <li>replay offline del resolved-rate controller prima dell’abilitazione online;</li>
+      <li>loop encoder di velocità separato: la rete non genera direttamente PWM.</li>
+    </ol>
+    <h3>Generazione delle eccitazioni</h3>
+    <pre><code># Gradini di velocità per arm 1; genera soltanto il CSV
+scripts/rosaia.sh excitation --type step --axis 0 \
+  --levels 0,5,10,0,-5,-10,0 --dwell 2 \
+  --output data/excitation_profiles/arm1_step.csv
+
+# Serie di Fourier/multisinusoide per arm 1
+scripts/rosaia.sh excitation --type fourier --axis 0 \
+  --frequencies 0.05,0.11,0.19 --duration 60 \
+  --maximum-velocity 10 \
+  --output data/excitation_profiles/arm1_fourier.csv</code></pre>
+    <p>I profili sono riferimenti <code>q̇</code> non attuanti. L’esecuzione hardware
+      sarà abilitata dopo la calibrazione del loop di velocità.</p>
+    <h3>Training MLP per un braccio</h3>
+    <pre><code>scripts/rosaia.sh train \
+  --arm arm_1 \
+  --train-session data/sessions/arm1_step_train_01 \
+  --train-session data/sessions/arm1_fourier_train_01 \
+  --validation-session data/sessions/arm1_validation_01 \
+  --camera-to-motor-offset-ms 0.0 \
+  --hidden 32,32 \
+  --output models/calibration_01/arm_1</code></pre>
+    <p>Il modello salva <code>model.npz</code> e <code>metadata.json</code>. La validazione
+      usa sessioni complete mai viste nel training.</p>
+    <h3>Pubblicazione del Jacobiano</h3>
+    <pre><code># Prima configurare i model_directories in models.yaml
+scripts/rosaia.sh jacobian
+ros2 topic echo /jacobian_model/status
+ros2 topic echo /arm_1/jacobian</code></pre>
+    <p>Specifica completa: <a style="color:var(--blue)" href="TRAINING_PIPELINE.md">TRAINING_PIPELINE.md</a>.</p>
+  </section>
+
+  <section id="stop">
+    <h2>Arresto</h2>
+    <pre><code>scripts/rosaia.sh stop</code></pre>
+    <p>Quindi interrompere recorder, detector e bridge con <kbd>Ctrl</kbd>+<kbd>C</kbd>.
+      Il comando host non sostituisce il watchdog firmware né il sezionamento dell’alimentazione.</p>
+  </section>
+
+  <footer>Documento locale e versionato · aggiornare insieme a wiring, config ROS e protocollo firmware.</footer>
+</main>
+<script>
+  document.querySelectorAll('pre').forEach((pre) => {
+    const button = document.createElement('button');
+    button.className = 'copy'; button.textContent = 'Copia';
+    button.addEventListener('click', async () => {
+      await navigator.clipboard.writeText(pre.querySelector('code').innerText);
+      button.textContent = 'Copiato'; setTimeout(() => button.textContent = 'Copia', 1200);
+    });
+    pre.appendChild(button);
+  });
+</script>
+</body>
+</html>

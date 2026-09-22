@@ -1,0 +1,28 @@
+bluno_motor_bridge:
+  ros__parameters:
+    # Verified on 2026-09-19; resolves to /dev/ttyACM0 on the current host.
+    serial_port: "/dev/serial/by-id/usb-2341_0043-if00"
+    baud_rate: 115200
+    command_rate_hz: 100.0
+    command_timeout_ms: 300
+    reconnect_period_s: 1.0
+
+    # Initial M2 bench-test limit; supply current limit is set independently.
+    max_abs_command: 255
+
+    # Both physical primary motors are handled by the same Bluno/shield.
+    active_axes: [true, true]
+    axis_names: [arm_1_primary, arm_2_primary]
+    shield_channels: [M2, M1]
+
+    # Signs require experimental verification.
+    motor_sign: [1, 1]
+
+    # Reserved calibration values. The bridge does not consume them yet.
+    # A negative or zero value means unknown/unusable, never an estimate.
+    axis_0_encoder_cpr: -1
+    axis_1_encoder_cpr: -1
+    axis_0_gear_ratio: 9.7
+    axis_1_gear_ratio: -1.0
+    axis_0_current_sensitivity_v_per_a: -1.0
+    axis_1_current_sensitivity_v_per_a: -1.0

@@ -1,0 +1,31 @@
+# ROS 2 / colcon outputs
+ros2_ws/build/
+ros2_ws/install/
+ros2_ws/log/
+/log/
+
+# Local camera captures and extracted inspection frames
+data/**/*.mkv
+data/**/*.avi
+data/**/*.mp4
+data/**/checks/
+data/calibration/
+data/encoder_range/*.csv
+data/excitation_profiles/
+data/sessions/
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Editors and local files
+.vscode/
+.idea/
+*.swp
+
+# Local Arduino toolchain and device backups
+.tools/
+.arduino/
+.arduino-cli.yaml
+backup/

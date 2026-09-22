@@ -1,0 +1,33 @@
+aruco_shape_tracker:
+  ros__parameters:
+    camera_backend: "realsense_rgbd"
+    camera_serial: "152122077644"
+    # The D435 supports synchronized colour/depth at this profile.
+    width: 1280
+    height: 720
+    fps: 30
+    dictionary: "DICT_4X4_50"
+    minimum_reference_area_px2: 200.0
+    minimum_base_baseline_m: 0.10
+    depth_inner_fraction: 0.60
+    minimum_depth_samples: 10
+    minimum_depth_m: 0.10
+    maximum_depth_m: 5.0
+
+    # Initial values from the stationary RGB-D test on 2026-09-22. They are
+    # deliberately conservative and will be identified from calibration data.
+    enable_kalman: true
+    kalman_lateral_std_m: 0.0006
+    kalman_depth_std_m: 0.0015
+    kalman_acceleration_std_m_s2: 0.50
+    kalman_reset_gap_s: 0.50
+    base_rotation_filter_alpha: 0.15
+    publish_annotated_image: true
+
+    # Provisional mapping inferred from the eight markers visible on 2026-09-21.
+    # Each consecutive group of three entries belongs to the corresponding arm.
+    arm_names: ["arm_1", "arm_2"]
+    reference_marker_ids: [0, 1]
+    moving_marker_ids: [2, 3, 4, 5, 6, 7]
+    output_topics: ["/arm_1/aruco_state", "/arm_2/aruco_state"]
+    raw_3d_topics: ["/arm_1/aruco_points_3d_raw", "/arm_2/aruco_points_3d_raw"]

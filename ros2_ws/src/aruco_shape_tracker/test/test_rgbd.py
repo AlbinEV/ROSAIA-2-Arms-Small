@@ -1,6 +1,7 @@
 from aruco_shape_tracker.rgbd import (
     blend_rotation,
     deproject_pixel,
+    frozen_reference_frame,
     PinholeIntrinsics,
     project_to_base_frame,
     robot_rotation_from_bases,
@@ -47,3 +48,22 @@ def test_robot_frame_uses_base_baseline_and_camera_down():
     assert np.linalg.det(rotation) == pytest.approx(1.0)
     assert rotation[:, 0] @ np.array([0.4, 0.0, 0.02]) > 0.0
     assert rotation[:, 1] @ np.array([0.0, 1.0, 0.0]) > 0.99
+
+
+def test_frozen_reference_frame_uses_robust_origins():
+    samples = {
+        0: [
+            np.array([-0.2, -0.3, 0.85]),
+            np.array([-0.201, -0.3, 0.85]),
+            np.array([2.0, 2.0, 2.0]),
+        ],
+        1: [
+            np.array([0.2, -0.3, 0.87]),
+            np.array([0.201, -0.3, 0.87]),
+            np.array([3.0, 3.0, 3.0]),
+        ],
+    }
+    origins, rotation = frozen_reference_frame(samples, [0, 1])
+    np.testing.assert_allclose(origins[0], [-0.2, -0.3, 0.85], atol=0.002)
+    np.testing.assert_allclose(origins[1], [0.201, -0.3, 0.87], atol=0.002)
+    np.testing.assert_allclose(rotation.T @ rotation, np.eye(3), atol=1e-12)

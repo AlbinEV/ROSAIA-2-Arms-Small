@@ -142,6 +142,31 @@ def robot_rotation_from_bases(
     return np.column_stack((x_axis, y_axis, z_axis))
 
 
+def frozen_reference_frame(
+    samples: dict[int, list[np.ndarray]],
+    reference_ids: list[int],
+    *,
+    minimum_baseline_m: float = 0.10,
+) -> tuple[dict[int, np.ndarray], np.ndarray]:
+    """Freeze robust base origins and their shared rotation from samples."""
+    if len(reference_ids) < 2:
+        raise ValueError('at least two reference markers are required')
+    origins = {}
+    for marker_id in reference_ids:
+        values = np.asarray(samples.get(marker_id, []), dtype=np.float64)
+        if values.ndim != 2 or values.shape[0] < 1 or values.shape[1] != 3:
+            raise ValueError(f'missing reference samples for marker {marker_id}')
+        if not np.isfinite(values).all():
+            raise ValueError('reference samples must be finite')
+        origins[marker_id] = np.median(values, axis=0)
+    rotation = robot_rotation_from_bases(
+        origins[reference_ids[0]],
+        origins[reference_ids[1]],
+        minimum_baseline_m=minimum_baseline_m,
+    )
+    return origins, rotation
+
+
 def blend_rotation(
     previous: np.ndarray | None, current: np.ndarray, alpha: float
 ) -> np.ndarray:

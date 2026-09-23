@@ -26,9 +26,9 @@ constexpr uint8_t AXIS1_CURRENT_PIN = A1;
 // Bench-test cap. The ROS bridge applies the same bound independently.
 constexpr int16_t MAX_ABS_COMMAND = 255;
 constexpr int16_t MAX_RELATIVE_STEP_COUNTS = 50;
-constexpr int8_t AXIS0_ENCODER_SIGN = -1;
+constexpr int8_t AXIS0_ENCODER_SIGN = 1;
 constexpr int8_t AXIS1_ENCODER_SIGN = -1;
-constexpr int8_t AXIS0_COMMAND_TO_OPERATIONAL_SIGN = 1;
+constexpr int8_t AXIS0_COMMAND_TO_OPERATIONAL_SIGN = -1;
 constexpr int8_t AXIS1_COMMAND_TO_OPERATIONAL_SIGN = -1;
 constexpr int32_t AXIS0_OPERATIONAL_MIN_COUNT = 0;
 constexpr int32_t AXIS0_OPERATIONAL_MAX_COUNT = 300;
@@ -589,6 +589,12 @@ void sendTelemetryIfDue() {
   Serial.print(',');
   Serial.print(readAxis1EncoderAtomic());
   Serial.print(',');
+  // These are the commands actually present at the PWM outputs after local
+  // watchdog, position-limit and STEP termination logic.
+  Serial.print(requestedAxis0Command);
+  Serial.print(',');
+  Serial.print(requestedAxis1Command);
+  Serial.print(',');
   Serial.print(currentFilteredAdc[0]);
   Serial.print(',');
   Serial.print(currentFilteredAdc[1]);
@@ -623,7 +629,7 @@ void setup() {
 
   lastTelemetryMs = millis();
   lastCurrentSampleUs = micros();
-  Serial.print(F("BOOT,BLUNO_MOTOR_CONTROLLER,2,MAX_PWM,"));
+  Serial.print(F("BOOT,BLUNO_MOTOR_CONTROLLER,3,MAX_PWM,"));
   Serial.println(MAX_ABS_COMMAND);
 }
 

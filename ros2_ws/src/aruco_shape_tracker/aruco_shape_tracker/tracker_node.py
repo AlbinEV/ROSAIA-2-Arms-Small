@@ -17,6 +17,7 @@ from .geometry import quadrilateral_area
 from .kalman import PositionKalman3D
 from .rgbd import (
     blend_rotation,
+    frozen_reference_frame,
     project_to_base_frame,
     robot_rotation_from_bases,
     robust_marker_depth,
@@ -88,7 +89,7 @@ class ArucoShapeTracker(Node):
         self.declare_parameter('height', 720)
         self.declare_parameter('fps', 30)
         self.declare_parameter('dictionary', 'DICT_4X4_50')
-        self.declare_parameter('minimum_reference_area_px2', 200.0)
+        self.declare_parameter('minimum_reference_area_px2', 80.0)
         self.declare_parameter('minimum_base_baseline_m', 0.10)
         self.declare_parameter('depth_inner_fraction', 0.60)
         self.declare_parameter('minimum_depth_samples', 10)
@@ -100,6 +101,8 @@ class ArucoShapeTracker(Node):
         self.declare_parameter('kalman_acceleration_std_m_s2', 0.50)
         self.declare_parameter('kalman_reset_gap_s', 0.50)
         self.declare_parameter('base_rotation_filter_alpha', 0.15)
+        self.declare_parameter('freeze_reference_markers', True)
+        self.declare_parameter('reference_lock_frames', 30)
         self.declare_parameter('publish_annotated_image', True)
         self.declare_parameter('arm_names', ['arm_1'])
         self.declare_parameter('reference_marker_ids', [0])
@@ -140,6 +143,12 @@ class ArucoShapeTracker(Node):
         self._rotation_alpha = float(
             self.get_parameter('base_rotation_filter_alpha').value
         )
+        self._freeze_references = bool(
+            self.get_parameter('freeze_reference_markers').value
+        )
+        self._reference_lock_frames = int(
+            self.get_parameter('reference_lock_frames').value
+        )
         self._publish_image = bool(
             self.get_parameter('publish_annotated_image').value
         )
@@ -147,6 +156,8 @@ class ArucoShapeTracker(Node):
             raise ValueError('camera dimensions and fps must be positive')
         if not 0.0 < self._rotation_alpha <= 1.0:
             raise ValueError('base_rotation_filter_alpha must be in (0, 1]')
+        if self._reference_lock_frames <= 0:
+            raise ValueError('reference_lock_frames must be positive')
 
         arm_names = self._strings('arm_names')
         reference_ids = self._integers('reference_marker_ids')
@@ -217,6 +228,10 @@ class ArucoShapeTracker(Node):
         self._last_status_frame = -1000
         self._empty_reads = 0
         self._base_rotation = None
+        self._reference_origins = {}
+        self._reference_samples = {
+            marker_id: [] for marker_id in reference_ids
+        }
         self._timer = self.create_timer(1.0 / self._fps, self._process_frame)
         self.get_logger().info(
             f'RGB-D ArUco tracker active on RealSense {self._serial} at '
@@ -294,18 +309,16 @@ class ArucoShapeTracker(Node):
         return message
 
     def _publish_arm(
-        self, arm, detections, raw_points, filtered_points,
-        sample_counts, base_rotation, stamp
+        self, arm, raw_points, filtered_points, sample_counts,
+        base_origin, base_rotation, stamp
     ) -> bool:
-        reference_id = arm['reference_id']
         moving_ids = arm['moving_ids']
-        required = (reference_id, *moving_ids)
-        if any(marker_id not in filtered_points for marker_id in required):
+        if any(marker_id not in filtered_points for marker_id in moving_ids):
             return False
         try:
             local_points = project_to_base_frame(
                 [filtered_points[value] for value in moving_ids],
-                filtered_points[reference_id],
+                base_origin,
                 base_rotation,
             )
         except (ValueError, np.linalg.LinAlgError):
@@ -313,7 +326,7 @@ class ArucoShapeTracker(Node):
 
         arm['state_publisher'].publish(self._point_cloud(
             stamp,
-            f'aruco_base_{reference_id}',
+            f"aruco_base_{arm['reference_id']}",
             local_points,
             moving_ids,
             channels=(
@@ -392,32 +405,71 @@ class ArucoShapeTracker(Node):
         )
         complete = []
         reference_ids = [arm['reference_id'] for arm in self._arms]
-        references_valid = all(
-            marker_id in filtered_points
-            and marker_id in detections
-            and quadrilateral_area(detections[marker_id])
-            >= self._minimum_reference_area
+        reference_valid = {
+            marker_id: (
+                marker_id in filtered_points
+                and marker_id in detections
+                and quadrilateral_area(detections[marker_id])
+                >= self._minimum_reference_area
+            )
             for marker_id in reference_ids
-        )
+        }
+        references_valid = all(reference_valid.values())
         if references_valid and len(reference_ids) >= 2:
-            try:
-                measured_rotation = robot_rotation_from_bases(
-                    filtered_points[reference_ids[0]],
-                    filtered_points[reference_ids[1]],
-                    minimum_baseline_m=self._minimum_baseline,
+            if self._freeze_references and self._base_rotation is None:
+                for marker_id in reference_ids:
+                    self._reference_samples[marker_id].append(
+                        filtered_points[marker_id].copy()
+                    )
+                sample_count = min(
+                    len(values) for values in self._reference_samples.values()
                 )
-                self._base_rotation = blend_rotation(
-                    self._base_rotation,
-                    measured_rotation,
-                    self._rotation_alpha,
-                )
-            except ValueError:
-                pass
-        if self._base_rotation is not None and references_valid:
+                if sample_count >= self._reference_lock_frames:
+                    try:
+                        origins, rotation = frozen_reference_frame(
+                            self._reference_samples,
+                            reference_ids,
+                            minimum_baseline_m=self._minimum_baseline,
+                        )
+                        self._reference_origins = origins
+                        self._base_rotation = rotation
+                        self.get_logger().info(
+                            'reference frame locked from '
+                            f'{sample_count} RGB-D samples'
+                        )
+                    except ValueError:
+                        for values in self._reference_samples.values():
+                            values.clear()
+            elif not self._freeze_references:
+                try:
+                    measured_rotation = robot_rotation_from_bases(
+                        filtered_points[reference_ids[0]],
+                        filtered_points[reference_ids[1]],
+                        minimum_baseline_m=self._minimum_baseline,
+                    )
+                    self._base_rotation = blend_rotation(
+                        self._base_rotation,
+                        measured_rotation,
+                        self._rotation_alpha,
+                    )
+                    self._reference_origins = {
+                        value: filtered_points[value].copy()
+                        for value in reference_ids
+                    }
+                except ValueError:
+                    pass
+        elif self._freeze_references and self._base_rotation is None:
+            for values in self._reference_samples.values():
+                values.clear()
+        if self._base_rotation is not None:
             for arm in self._arms:
+                reference_id = arm['reference_id']
+                base_origin = self._reference_origins.get(reference_id)
+                if base_origin is None:
+                    continue
                 if self._publish_arm(
-                    arm, detections, raw_points, filtered_points,
-                    sample_counts, self._base_rotation, stamp
+                    arm, raw_points, filtered_points, sample_counts,
+                    base_origin, self._base_rotation, stamp
                 ):
                     complete.append(arm['name'])
         self._publish_annotated(
@@ -431,6 +483,20 @@ class ArucoShapeTracker(Node):
                 'camera_serial': self._serial,
                 'detected_ids': sorted(detections),
                 'depth_valid_ids': sorted(raw_points),
+                'valid_reference_ids': sorted(
+                    marker_id
+                    for marker_id, valid in reference_valid.items()
+                    if valid
+                ),
+                'base_rotation_ready': self._base_rotation is not None,
+                'reference_frame_locked': (
+                    self._freeze_references and self._base_rotation is not None
+                ),
+                'cached_reference_ids': sorted(self._reference_origins),
+                'reference_lock_samples': min(
+                    (len(values) for values in self._reference_samples.values()),
+                    default=0,
+                ),
                 'complete_arms': complete,
                 'coordinate_frame': 'metric_robot_base_3d',
                 'kalman_enabled': self._enable_kalman,

@@ -21,6 +21,7 @@ def load_sessions(
     session_paths: list[str | Path],
     arm_name: str,
     camera_to_motor_offset_ms: float = 0.0,
+    encoder_zero_raw: int | None = None,
 ) -> pd.DataFrame:
     """Load rows and interpolate motor signals at corrected camera times."""
     frames = []
@@ -33,11 +34,20 @@ def load_sessions(
         missing = sorted(set(REQUIRED_COLUMNS) - set(frame.columns))
         if missing:
             raise ValueError(f'{source}: missing columns {missing}')
-        frame = frame.loc[frame['arm'] == arm_name, REQUIRED_COLUMNS].copy()
+        selected = list(REQUIRED_COLUMNS)
+        if 'current_a' in frame.columns:
+            selected.append('current_a')
+        frame = frame.loc[frame['arm'] == arm_name, selected].copy()
+        if 'current_a' not in frame.columns:
+            frame['current_a'] = np.nan
         if frame.empty:
             continue
         frame = _align_motor_stream(
-            session, frame, arm_name, camera_to_motor_offset_ms
+            session,
+            frame,
+            arm_name,
+            camera_to_motor_offset_ms,
+            encoder_zero_raw,
         )
         frame['session'] = session.name
         frames.append(frame)
@@ -63,6 +73,7 @@ def _align_motor_stream(
     frame: pd.DataFrame,
     arm_name: str,
     camera_to_motor_offset_ms: float,
+    encoder_zero_raw_override: int | None,
 ) -> pd.DataFrame:
     """Interpolate encoder/current data onto corrected camera timestamps."""
     metadata_path = session / 'metadata.json'
@@ -79,6 +90,14 @@ def _align_motor_stream(
         raise ValueError(f'{session}: missing metadata for {arm_name}')
     axis = int(arm_configs[arm_name]['axis'])
     sign = int(arm_configs[arm_name]['encoder_sign'])
+    zero_value = arm_configs[arm_name].get('encoder_zero_raw', 0)
+    if zero_value is None:
+        raise ValueError(f'{session}: encoder zero was not captured')
+    encoder_zero = (
+        int(zero_value)
+        if encoder_zero_raw_override is None
+        else int(encoder_zero_raw_override)
+    )
     if axis not in (0, 1) or sign not in (-1, 1):
         raise ValueError(f'{session}: invalid axis/sign for {arm_name}')
     if set(frame['axis'].astype(int).unique()) != {axis}:
@@ -89,6 +108,9 @@ def _align_motor_stream(
         'receive_time_ns', f'encoder_{axis}_raw', f'command_{axis}',
         f'adc_{axis}_raw', f'current_{axis}_ma',
     ]
+    host_current_column = f'current_{axis}_a'
+    if host_current_column in telemetry.columns:
+        columns.append(host_current_column)
     missing = sorted(set(columns) - set(telemetry.columns))
     if missing:
         raise ValueError(f'{telemetry_path}: missing columns {missing}')
@@ -115,10 +137,14 @@ def _align_motor_stream(
             telemetry[column].to_numpy(dtype=np.float64),
         )
 
-    frame['q_operational'] = sign * interpolate(f'encoder_{axis}_raw')
+    frame['q_operational'] = sign * (
+        interpolate(f'encoder_{axis}_raw') - encoder_zero
+    )
     frame['command'] = interpolate(f'command_{axis}')
     frame['adc_raw'] = interpolate(f'adc_{axis}_raw')
     frame['current_ma'] = interpolate(f'current_{axis}_ma')
+    if host_current_column in telemetry.columns:
+        frame['current_a'] = interpolate(host_current_column)
     return frame
 
 
@@ -127,3 +153,66 @@ def arrays(data: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
     q_values = data['q_operational'].to_numpy(dtype=np.float64).reshape(-1, 1)
     states = data[STATE_COLUMNS].to_numpy(dtype=np.float64)
     return q_values, states
+
+
+def add_motion_direction(
+    data: pd.DataFrame, command_to_q_sign: int = -1
+) -> pd.DataFrame:
+    """Label motion branches, retaining the last direction during dwell."""
+    if command_to_q_sign not in (-1, 1):
+        raise ValueError('command_to_q_sign must be -1 or 1')
+    labelled = data.copy()
+    labelled['motion_direction'] = 0
+    for _, indices in labelled.groupby('session', sort=False).groups.items():
+        command = labelled.loc[indices, 'command'].to_numpy(dtype=np.float64)
+        direction = np.sign(command * command_to_q_sign).astype(np.int8)
+        last = 0
+        for index, value in enumerate(direction):
+            if value:
+                last = int(value)
+            direction[index] = last
+        labelled.loc[indices, 'motion_direction'] = direction
+    return labelled
+
+
+def select_motion_direction(
+    data: pd.DataFrame, direction: str, command_to_q_sign: int = -1
+) -> pd.DataFrame:
+    """Select increasing or decreasing-q branches from complete sessions."""
+    if direction == 'all':
+        return data.copy()
+    signs = {'increasing': 1, 'decreasing': -1}
+    if direction not in signs:
+        raise ValueError(f'unsupported motion direction: {direction}')
+    labelled = add_motion_direction(data, command_to_q_sign)
+    selected = labelled.loc[
+        labelled['motion_direction'] == signs[direction]
+    ].copy()
+    if len(selected) < 20:
+        raise ValueError(
+            f'only {len(selected)} rows remain for direction {direction}'
+        )
+    return selected.reset_index(drop=True)
+
+
+def balance_q_bins(
+    data: pd.DataFrame, bin_width: float, maximum_per_session_bin: int
+) -> pd.DataFrame:
+    """Cap dense dwell regions while retaining every session and q bin."""
+    if bin_width <= 0.0 or maximum_per_session_bin <= 0:
+        raise ValueError('bin width and maximum samples must be positive')
+    balanced = data.copy()
+    balanced['_q_bin'] = np.floor(
+        balanced['q_operational'].to_numpy(dtype=np.float64) / bin_width
+    ).astype(np.int64)
+    kept = []
+    for _, group in balanced.groupby(['session', '_q_bin'], sort=False):
+        if len(group) <= maximum_per_session_bin:
+            kept.append(group)
+            continue
+        positions = np.linspace(
+            0, len(group) - 1, maximum_per_session_bin, dtype=np.int64
+        )
+        kept.append(group.iloc[positions])
+    result = pd.concat(kept, ignore_index=True)
+    return result.drop(columns=['_q_bin'])

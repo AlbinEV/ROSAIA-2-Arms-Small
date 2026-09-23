@@ -12,7 +12,9 @@ constexpr int16_t MAX_ABS_COMMAND = 255;
 ```
 
 Axis 0 is assigned to shield channel M2 and axis 1 to M1. Both axes accept
-independent signed commands. Current in amperes is unavailable until the
+independent signed commands. Protocol version 3 reports the PWM commands
+actually present after the local watchdog, position limits and bounded-step
+termination. Current in amperes is unavailable until the
 ACS712 variant and sensitivity are measured; raw A0/A1 ADC telemetry remains
 available for both channels.
 
@@ -39,8 +41,9 @@ and its magnitude sets the displacement limit. Termination uses the absolute
 encoder displacement from the starting count, so an unknown encoder polarity
 cannot make the motion run past the requested count magnitude.
 
-The provisional axis-0 operational coordinate is `q0 = -encoder0_raw`.
-Axis 1 uses `q1 = -encoder1_raw`: its negative motor command produces
+The calibrated axis-0 operational coordinate is `q0 = encoder0_raw`: the
+negative M2 command produces physical contraction and increases its raw count.
+Axis 1 provisionally uses `q1 = -encoder1_raw`: its negative motor command produces
 contraction and increases `q1`.
 Firmware enforces `0 <= q <= 300` independently on both axes. `ZERO_ENC`
 defines the current mechanical pose as zero for both encoders. The legacy

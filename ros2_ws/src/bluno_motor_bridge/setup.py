@@ -25,6 +25,8 @@ setup(
     entry_points={
         'console_scripts': [
             'bluno_motor_bridge_node = bluno_motor_bridge.bridge_node:main',
+            'encoder_velocity_controller = '
+            'bluno_motor_bridge.velocity_controller_node:main',
         ],
     },
 )

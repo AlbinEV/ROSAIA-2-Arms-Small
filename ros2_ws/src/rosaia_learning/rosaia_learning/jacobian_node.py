@@ -34,7 +34,7 @@ class JacobianPublisher(Node):
         super().__init__('jacobian_publisher')
         self.declare_parameter('arm_names', ['arm_1', 'arm_2'])
         self.declare_parameter('axis_indices', [0, 1])
-        self.declare_parameter('encoder_signs', [-1, -1])
+        self.declare_parameter('encoder_signs', [1, -1])
         self.declare_parameter('model_directories', ['', ''])
         self.declare_parameter(
             'output_topics', ['/arm_1/jacobian', '/arm_2/jacobian']

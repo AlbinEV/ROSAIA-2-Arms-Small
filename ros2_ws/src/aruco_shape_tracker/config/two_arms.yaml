@@ -7,7 +7,7 @@ aruco_shape_tracker:
     height: 720
     fps: 30
     dictionary: "DICT_4X4_50"
-    minimum_reference_area_px2: 200.0
+    minimum_reference_area_px2: 80.0
     minimum_base_baseline_m: 0.10
     depth_inner_fraction: 0.60
     minimum_depth_samples: 10
@@ -22,6 +22,10 @@ aruco_shape_tracker:
     kalman_acceleration_std_m_s2: 0.50
     kalman_reset_gap_s: 0.50
     base_rotation_filter_alpha: 0.15
+    # Bases 0/1 are rigid. Lock their median RGB-D poses after one second;
+    # subsequent arm states no longer require the bases to remain visible.
+    freeze_reference_markers: true
+    reference_lock_frames: 30
     publish_annotated_image: true
 
     # Provisional mapping inferred from the eight markers visible on 2026-09-21.

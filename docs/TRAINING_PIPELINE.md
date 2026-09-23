@@ -53,6 +53,23 @@ Start each calibration record from
 `config/calibration_manifest.template.yaml`; set `eligible_for_training: true`
 only after every acceptance field has been verified from recorded data.
 
+Before assigning a session to a split, run the machine-readable audit:
+
+```bash
+scripts/rosaia.sh audit \
+  --session data/sessions/arm1_quasistatic_train_01 \
+  --session data/sessions/arm1_quasistatic_validation_01 \
+  --arm arm_1 \
+  --minimum-q-span 150 \
+  --output data/reports/arm1_dataset_audit.json
+```
+
+The default gate requires schema v5, finite RGB-D/current data, at least 100
+visual rows per configured arm, a 30-count position span, both directions of
+motion, and no firmware fault bits other than the expected
+`CURRENT_SCALE_UNKNOWN` bit. A home baseline is therefore expected to fail the
+motion gate while remaining useful to estimate stationary visual noise.
+
 ## Dataset acquisition
 
 `rosaia_data_acquisition/session_recorder` writes one session directory:
@@ -70,9 +87,18 @@ inspection, but the training preprocessing stage should interpolate encoder
 position onto `camera_time_ns` using the raw stream after applying the measured
 time offset. This interpolation is implemented in `rosaia_learning`; samples
 outside the common camera/telemetry interval are rejected rather than clamped.
-Both files contain encoder data; they also preserve raw current
-ADC and calibrated milliamps. Until the sensor sensitivity is calibrated,
-`current_ma` remains unavailable and `adc_raw` is used only diagnostically.
+Both files contain encoder data and preserve raw current ADC. Schema version 5
+also stores the host-calibrated ACS712 value in ampere (`current_a` and
+`current_N_a`). The legacy firmware `current_ma` field remains present and may
+contain its unavailable sentinel.
+
+Schema version 5 captures the first valid raw encoder pair as the immutable
+session zero, retains x, y and z for every marker, and samples the latest
+per-axis `velocity_reference` in both CSV streams. It additionally records the
+host ACS712 conversion after per-connection auto-zero. `q_operational` is
+computed relative to the session encoder zero. Commands in both CSV files are the
+firmware-reported PWM values actually present after watchdog, position-limit
+and bounded-step logic, not merely requested values.
 
 Rows are rejected online when any of the three moving markers is missing, the
 shape is non-finite, motor telemetry is absent, or the latest telemetry exceeds
@@ -94,6 +120,11 @@ Use independent, bounded trajectories, beginning with one arm stationary:
 Coverage should be evaluated in `(q, q_dot, direction)` bins rather than by row
 count. Stationary dwell segments are retained to estimate visual noise and
 relaxation, but they must not dominate the training loss.
+
+The first arm-1 calibration cycle uses a 10 s trapezoid: 3 s acceleration,
+4 s at 30 counts/s and 3 s deceleration, followed by a 1 s dwell and a mirrored
+return. Its nominal excursion is 210 counts inside the provisional 0--300
+range.
 
 ## Baselines and learned model
 
@@ -160,6 +191,46 @@ shuffling adjacent frames. Report per marker and per state component:
 - one-step and rollout error;
 - resolved-rate tracking in offline replay;
 - command saturation, limit hits, and invalid-frame fraction.
+
+The trainer refuses any session path shared by train and validation. Its saved
+metadata contains RMSE, absolute-error P95 and maximum, the train/validation
+position ranges, and the fraction of validation samples outside the training
+range. Model outputs are directories containing `model.npz` and
+`metadata.json`, for example:
+
+```bash
+scripts/rosaia.sh train \
+  --train-session data/sessions/arm1_quasistatic_train_01 \
+  --train-session data/sessions/arm1_quasistatic_train_02 \
+  --validation-session data/sessions/arm1_quasistatic_validation_01 \
+  --arm arm_1 --hidden 32,32 --camera-to-motor-offset-ms 0 \
+  --output data/models/arm1_mlp_v1
+```
+
+When hysteresis separates the two branches, train and compare independent
+scalar models while capping dense dwell bins:
+
+```bash
+scripts/rosaia.sh train ... --direction increasing \
+  --q-bin-width 5 --maximum-samples-per-session-bin 50 \
+  --output data/models/arm1_increasing_v1
+scripts/rosaia.sh train ... --direction decreasing \
+  --q-bin-width 5 --maximum-samples-per-session-bin 50 \
+  --output data/models/arm1_decreasing_v1
+```
+
+With the verified wiring, negative motor command increases operational `q`,
+so the default `--command-to-q-sign -1` applies to both arms. Zero-command
+dwell samples retain the direction of the preceding motion. The runtime model
+selector must use the requested motion direction; these branch models are not
+silently substituted into the existing single-model publisher.
+
+If multiple sessions share a physical encoder zero but did not each start
+exactly at home, pass that raw zero explicitly with `--encoder-zero-raw`.
+Without it, the loader uses the recorder's session-start count. Never use this
+override across a board reset unless home was re-established and `ZERO_ENC`
+was confirmed. The 2026-09-23 quasi-static sessions collected after the last
+confirmed reset share raw zero `0` on both axes.
 
 The model becomes eligible for online control only if it outperforms the local
 baseline on held-out trajectories, preserves the measured Jacobian sign, and

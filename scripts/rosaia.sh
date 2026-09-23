@@ -24,13 +24,17 @@ Commands:
   bridge                Start the Bluno serial bridge
   vision                Start the RealSense RGB-D ArUco tracker
   recorder [NAME]       Record synchronized CSV data under data/sessions
+  audit [ARGS]          Audit recorded sessions before MLP training
   excitation [ARGS]     Generate a non-actuating step/Fourier reference CSV
+  profile [ARGS]        Execute a return-home encoder-velocity profile
   train [ARGS]          Train one MLP from complete recorded sessions
   jacobian [ARGS]       Publish learned Jacobians from encoder positions
   controller            Start the non-actuating shape controller
   view                  Open the annotated image with rqt_image_view
   status                Show devices, relevant nodes and topic rates
   stop                  Publish a zero command once
+  step AXIS MOTOR_COUNTS PWM
+                        Send one bounded move; sign selects motor direction
   preview               Run the direct single-camera ArUco preview
 EOF
 }
@@ -65,10 +69,19 @@ case "$command" in
     exec ros2 launch rosaia_data_acquisition session_recorder.launch.py \
       session_name:="$session_name" output_root:="$REPO_ROOT/data/sessions"
     ;;
+  audit)
+    source_ros
+    cd "$REPO_ROOT"
+    exec ros2 run rosaia_learning audit_sessions "$@"
+    ;;
   excitation)
     source_ros
     cd "$REPO_ROOT"
     exec ros2 run rosaia_learning generate_excitation "$@"
+    ;;
+  profile)
+    source_ros
+    exec ros2 run rosaia_learning play_velocity_profile "$@"
     ;;
   train)
     source_ros
@@ -106,6 +119,15 @@ case "$command" in
     source_ros
     ros2 topic pub --once /motor_command std_msgs/msg/Int16MultiArray \
       '{data: [0, 0]}'
+    ;;
+  step)
+    source_ros
+    if [[ $# -ne 3 ]]; then
+      echo "Usage: scripts/rosaia.sh step AXIS MOTOR_SIGNED_COUNTS PWM" >&2
+      exit 2
+    fi
+    ros2 topic pub --once /motor_step_command std_msgs/msg/Int16MultiArray \
+      "{data: [$1, $2, $3]}"
     ;;
   preview)
     cd "$REPO_ROOT"

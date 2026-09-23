@@ -10,8 +10,10 @@ from serial import SerialException
 from std_msgs.msg import Float32MultiArray, Int16MultiArray, Int64MultiArray, String
 
 from .protocol import (
+    adc_to_current_a,
     CURRENT_UNAVAILABLE_MA,
     encode_command,
+    encode_step_axis,
     encode_stop,
     parse_state,
     ProtocolError,
@@ -30,6 +32,8 @@ class BlunoMotorBridge(Node):
         self.declare_parameter('command_timeout_ms', 300)
         self.declare_parameter('reconnect_period_s', 1.0)
         self.declare_parameter('max_abs_command', 0)
+        self.declare_parameter('max_relative_step_counts', 10)
+        self.declare_parameter('relative_step_timeout_s', 3.5)
         self.declare_parameter('active_axes', [True, False])
         self.declare_parameter('motor_sign', [1, 1])
         self.declare_parameter('axis_names', ['arm_1_primary', 'arm_2_primary'])
@@ -40,6 +44,12 @@ class BlunoMotorBridge(Node):
         self.declare_parameter('axis_1_gear_ratio', -1.0)
         self.declare_parameter('axis_0_current_sensitivity_v_per_a', -1.0)
         self.declare_parameter('axis_1_current_sensitivity_v_per_a', -1.0)
+        self.declare_parameter('current_zero_adc', [512.0, 512.0])
+        self.declare_parameter('current_polarity', [1, 1])
+        self.declare_parameter('adc_reference_voltage_v', 5.0)
+        self.declare_parameter('auto_current_zero', True)
+        self.declare_parameter('auto_current_zero_samples', 25)
+        self.declare_parameter('current_deadband_adc_counts', 1.0)
 
         self._port = str(self.get_parameter('serial_port').value)
         self._baud = int(self.get_parameter('baud_rate').value)
@@ -47,28 +57,71 @@ class BlunoMotorBridge(Node):
         self._timeout_s = float(self.get_parameter('command_timeout_ms').value) / 1000.0
         self._reconnect_s = float(self.get_parameter('reconnect_period_s').value)
         self._limit = int(self.get_parameter('max_abs_command').value)
+        self._step_limit = int(
+            self.get_parameter('max_relative_step_counts').value
+        )
+        self._step_timeout_s = float(
+            self.get_parameter('relative_step_timeout_s').value
+        )
         self._active_axes = tuple(bool(v) for v in self.get_parameter('active_axes').value)
         self._motor_sign = tuple(int(v) for v in self.get_parameter('motor_sign').value)
         self._axis_names = tuple(str(v) for v in self.get_parameter('axis_names').value)
         self._shield_channels = tuple(
             str(v) for v in self.get_parameter('shield_channels').value
         )
+        self._current_sensitivity = (
+            float(self.get_parameter(
+                'axis_0_current_sensitivity_v_per_a'
+            ).value),
+            float(self.get_parameter(
+                'axis_1_current_sensitivity_v_per_a'
+            ).value),
+        )
+        self._current_zero_adc = tuple(
+            float(v) for v in self.get_parameter('current_zero_adc').value
+        )
+        self._current_polarity = tuple(
+            int(v) for v in self.get_parameter('current_polarity').value
+        )
+        self._adc_reference_v = float(
+            self.get_parameter('adc_reference_voltage_v').value
+        )
+        self._auto_current_zero = bool(
+            self.get_parameter('auto_current_zero').value
+        )
+        self._auto_current_zero_samples = int(
+            self.get_parameter('auto_current_zero_samples').value
+        )
+        self._current_deadband_adc_counts = float(
+            self.get_parameter('current_deadband_adc_counts').value
+        )
         self._validate_parameters()
 
         self._serial = None
+        self._firmware_ready = False
         self._rx_buffer = bytearray()
         self._stop_sent = False
         self._sequence = 0
         self._commands = (0, 0)
+        self._last_written_commands = (0, 0)
         self._last_command_time = None
         self._last_connect_attempt = -float('inf')
         self._last_state_time = None
         self._last_status_publish = -float('inf')
         self._invalid_packet_count = 0
         self._last_firmware_error = None
+        self._effective_current_zero = list(self._current_zero_adc)
+        self._current_zero_sums = [0, 0]
+        self._current_zero_count = 0
+        self._step_active = False
+        self._step_seen_motion = False
+        self._step_deadline = None
 
         self._command_sub = self.create_subscription(
             Int16MultiArray, 'motor_command', self._on_command, 10
+        )
+        self._step_sub = self.create_subscription(
+            Int16MultiArray, 'motor_step_command', self._on_step_command, 10
         )
         self._encoder_pub = self.create_publisher(
             Int64MultiArray, 'encoder_counts', 10
@@ -98,6 +151,10 @@ class BlunoMotorBridge(Node):
             raise ValueError('timeouts must be positive')
         if not 0 <= self._limit <= 255:
             raise ValueError('max_abs_command must be in [0, 255]')
+        if not 1 <= self._step_limit <= 50:
+            raise ValueError('max_relative_step_counts must be in [1, 50]')
+        if self._step_timeout_s <= 3.0:
+            raise ValueError('relative_step_timeout_s must exceed firmware timeout')
         for name, values in (
             ('active_axes', self._active_axes),
             ('motor_sign', self._motor_sign),
@@ -110,6 +167,22 @@ class BlunoMotorBridge(Node):
             raise ValueError('motor_sign entries must be -1 or 1')
         if self._shield_channels != ('M2', 'M1'):
             raise ValueError('current board contract requires axis mapping [M2, M1]')
+        if len(self._current_zero_adc) != 2 or any(
+            not 0.0 <= value <= 1023.0 for value in self._current_zero_adc
+        ):
+            raise ValueError('current_zero_adc must contain two valid ADC values')
+        if len(self._current_polarity) != 2 or any(
+            value not in (-1, 1) for value in self._current_polarity
+        ):
+            raise ValueError('current_polarity must contain two signs')
+        if self._adc_reference_v <= 0.0:
+            raise ValueError('adc_reference_voltage_v must be positive')
+        if self._auto_current_zero_samples <= 0:
+            raise ValueError('auto_current_zero_samples must be positive')
+        if self._current_deadband_adc_counts < 0.0:
+            raise ValueError('current ADC deadband must be non-negative')
+        if any(value == 0.0 for value in self._current_sensitivity):
+            raise ValueError('current sensitivity must be positive or negative if unknown')
 
     def _on_command(self, message: Int16MultiArray) -> None:
         if len(message.data) != 2:
@@ -131,6 +204,53 @@ class BlunoMotorBridge(Node):
         )
         self._last_command_time = time.monotonic()
 
+    def _on_step_command(self, message: Int16MultiArray) -> None:
+        if len(message.data) != 3:
+            self.get_logger().error(
+                'motor_step_command must contain [axis, signed_counts, pwm]'
+            )
+            return
+        axis, signed_counts, pwm = (int(value) for value in message.data)
+        if axis not in (0, 1) or not self._active_axes[axis]:
+            self.get_logger().error(f'rejected step: inactive/invalid axis {axis}')
+            return
+        if signed_counts == 0 or abs(signed_counts) > self._step_limit:
+            self.get_logger().error(
+                f'rejected step {signed_counts}: configured limit is '
+                f'{self._step_limit} counts'
+            )
+            return
+        if pwm <= 0 or pwm > self._limit:
+            self.get_logger().error(
+                f'rejected step PWM {pwm}: configured limit is {self._limit}'
+            )
+            return
+        if self._serial is None or self._step_active:
+            self.get_logger().error(
+                'rejected step: serial disconnected or another step is active'
+            )
+            return
+        try:
+            self._serial.write(encode_step_axis(
+                self._sequence, axis, signed_counts, pwm
+            ))
+        except (OSError, SerialException) as exc:
+            self._disconnect(str(exc))
+            return
+        self._sequence = (self._sequence + 1) % (2**31)
+        applied = [0, 0]
+        applied[axis] = pwm if signed_counts > 0 else -pwm
+        self._last_written_commands = tuple(applied)
+        self._step_active = True
+        self._step_seen_motion = False
+        self._step_deadline = time.monotonic() + self._step_timeout_s
+        self._commands = (0, 0)
+        self._last_command_time = None
+        self._stop_sent = False
+        self.get_logger().info(
+            f'sent bounded step axis={axis} counts={signed_counts} pwm={pwm}'
+        )
+
     def _connect_if_due(self, now: float) -> None:
         if self._serial is not None or not self._port:
             return
@@ -145,10 +265,17 @@ class BlunoMotorBridge(Node):
                 write_timeout=min(self._timeout_s, 0.1),
             )
             self._serial.reset_input_buffer()
-            self._serial.write(encode_stop())
+            self._last_written_commands = (0, 0)
             self._rx_buffer.clear()
-            self._stop_sent = True
-            self.get_logger().info(f'connected to {self._port} at {self._baud} baud')
+            self._firmware_ready = False
+            self._effective_current_zero = list(self._current_zero_adc)
+            self._current_zero_sums = [0, 0]
+            self._current_zero_count = 0
+            self._stop_sent = False
+            self.get_logger().info(
+                f'connected to {self._port} at {self._baud} baud; '
+                'waiting for firmware boot'
+            )
         except (OSError, SerialException) as exc:
             self._serial = None
             self.get_logger().warning(f'cannot open {self._port}: {exc}')
@@ -160,10 +287,15 @@ class BlunoMotorBridge(Node):
             except (OSError, SerialException):
                 pass
         self._serial = None
+        self._firmware_ready = False
         self._commands = (0, 0)
+        self._last_written_commands = (0, 0)
         self._last_command_time = None
         self._rx_buffer.clear()
         self._stop_sent = False
+        self._step_active = False
+        self._step_seen_motion = False
+        self._step_deadline = None
         self.get_logger().error(f'serial link closed: {reason}')
 
     def _tick(self) -> None:
@@ -172,17 +304,34 @@ class BlunoMotorBridge(Node):
 
         if self._serial is not None:
             try:
-                command_fresh = (
-                    self._last_command_time is not None
-                    and now - self._last_command_time <= self._timeout_s
-                )
-                if command_fresh:
-                    self._serial.write(encode_command(self._sequence, self._commands))
-                    self._sequence = (self._sequence + 1) % (2**31)
-                    self._stop_sent = False
-                elif not self._stop_sent:
-                    self._serial.write(encode_stop())
-                    self._stop_sent = True
+                self._read_available_state(now)
+                if not self._firmware_ready:
+                    pass
+                elif self._step_active:
+                    if now >= self._step_deadline:
+                        self._serial.write(encode_stop())
+                        self._last_written_commands = (0, 0)
+                        self._step_active = False
+                        self._stop_sent = True
+                        self.get_logger().error(
+                            'host step deadline reached; STOP sent'
+                        )
+                else:
+                    command_fresh = (
+                        self._last_command_time is not None
+                        and now - self._last_command_time <= self._timeout_s
+                    )
+                    if command_fresh:
+                        self._serial.write(encode_command(
+                            self._sequence, self._commands
+                        ))
+                        self._last_written_commands = self._commands
+                        self._sequence = (self._sequence + 1) % (2**31)
+                        self._stop_sent = False
+                    elif not self._stop_sent:
+                        self._serial.write(encode_stop())
+                        self._last_written_commands = (0, 0)
+                        self._stop_sent = True
                 self._read_available_state(now)
             except (OSError, SerialException) as exc:
                 self._disconnect(str(exc))
@@ -209,7 +358,11 @@ class BlunoMotorBridge(Node):
             del self._rx_buffer[:newline + 1]
             if not line:
                 continue
-            if line.startswith((b'BOOT,', b'OK,', b'PONG,')):
+            if line.startswith(b'BOOT,'):
+                self._firmware_ready = True
+                self.get_logger().info('firmware boot handshake received')
+                continue
+            if line.startswith((b'OK,', b'PONG,')):
                 continue
             if line.startswith(b'ERR,'):
                 self._last_firmware_error = line.decode('ascii', errors='replace')
@@ -225,21 +378,73 @@ class BlunoMotorBridge(Node):
                 continue
 
             self._last_state_time = now
+            self._firmware_ready = True
+            if (
+                self._auto_current_zero
+                and self._current_zero_count < self._auto_current_zero_samples
+                and packet.applied_commands == (0, 0)
+                and self._commands == (0, 0)
+            ):
+                for axis in range(2):
+                    self._current_zero_sums[axis] += packet.raw_adc[axis]
+                self._current_zero_count += 1
+                if self._current_zero_count == self._auto_current_zero_samples:
+                    self._effective_current_zero = [
+                        total / self._auto_current_zero_samples
+                        for total in self._current_zero_sums
+                    ]
+                    self.get_logger().info(
+                        'host current zero calibrated: '
+                        f'{self._effective_current_zero}'
+                    )
+            if self._step_active and packet.applied_commands is not None:
+                if any(packet.applied_commands):
+                    self._step_seen_motion = True
+                elif self._step_seen_motion:
+                    self._step_active = False
+                    self._step_deadline = None
+                    self._last_written_commands = (0, 0)
+                    self._stop_sent = True
+                    self.get_logger().info('bounded step completed in firmware')
             encoder_message = Int64MultiArray()
             encoder_message.data = list(packet.encoder_counts)
             self._encoder_pub.publish(encoder_message)
 
             current_message = Float32MultiArray()
-            current_message.data = [
-                float('nan')
-                if value == CURRENT_UNAVAILABLE_MA
-                else value / 1000.0
-                for value in packet.current_ma
-            ]
+            host_current = []
+            for axis, firmware_ma in enumerate(packet.current_ma):
+                if firmware_ma != CURRENT_UNAVAILABLE_MA:
+                    host_current.append(firmware_ma / 1000.0)
+                elif (
+                    self._current_sensitivity[axis] > 0.0
+                    and (
+                        not self._auto_current_zero
+                        or self._current_zero_count
+                        >= self._auto_current_zero_samples
+                    )
+                ):
+                    host_current.append(adc_to_current_a(
+                        packet.raw_adc[axis],
+                        self._effective_current_zero[axis],
+                        self._adc_reference_v,
+                        self._current_sensitivity[axis],
+                        self._current_polarity[axis],
+                        self._current_deadband_adc_counts,
+                    ))
+                else:
+                    host_current.append(float('nan'))
+            current_message.data = host_current
             self._current_pub.publish(current_message)
 
             state_message = String()
             payload = packet.as_dict()
+            if packet.applied_commands is None:
+                payload['applied_commands'] = self._last_written_commands
+                payload['applied_command_source'] = 'host_write_fallback'
+            else:
+                payload['applied_command_source'] = 'firmware_output_state'
+            payload['requested_commands'] = self._commands
+            payload['current_a_host'] = host_current
             payload['axis_names'] = self._axis_names
             payload['shield_channels'] = self._shield_channels
             state_message.data = json.dumps(payload, separators=(',', ':'))
@@ -253,12 +458,20 @@ class BlunoMotorBridge(Node):
         message.data = json.dumps(
             {
                 'connected': self._serial is not None,
+                'firmware_ready': self._firmware_ready,
+                'current_zero_adc': self._effective_current_zero,
+                'current_zero_ready': (
+                    not self._auto_current_zero
+                    or self._current_zero_count
+                    >= self._auto_current_zero_samples
+                ),
                 'serial_port': self._port,
                 'motion_unlocked': self._limit > 0,
                 'active_axes': self._active_axes,
                 'last_state_age_s': state_age,
                 'invalid_packet_count': self._invalid_packet_count,
                 'last_firmware_error': self._last_firmware_error,
+                'bounded_step_active': self._step_active,
             },
             separators=(',', ':'),
         )
@@ -268,6 +481,7 @@ class BlunoMotorBridge(Node):
         if self._serial is not None:
             try:
                 self._serial.write(encode_stop())
+                self._last_written_commands = (0, 0)
                 self._serial.flush()
             except (OSError, SerialException):
                 pass

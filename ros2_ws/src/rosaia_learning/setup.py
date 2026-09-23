@@ -24,7 +24,9 @@ setup(
     license='Apache-2.0',
     entry_points={
         'console_scripts': [
+            'audit_sessions = rosaia_learning.audit:main',
             'generate_excitation = rosaia_learning.excitation:main',
+            'play_velocity_profile = rosaia_learning.profile_player:main',
             'jacobian_publisher = rosaia_learning.jacobian_node:main',
             'train_mlp = rosaia_learning.train:main',
         ],

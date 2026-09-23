@@ -49,8 +49,9 @@ positions as a differentiable function of `q`, then obtain `J(q)` by automatic
 differentiation. A finite-difference/local ridge Jacobian is the baseline used
 to validate signs and scaling before enabling the learned controller.
 
-The implemented `rosaia_data_acquisition` recorder preserves both the complete
-motor telemetry stream and one visual-sample table. Offline preprocessing can
+The implemented `rosaia_data_acquisition` recorder preserves the complete
+motor telemetry stream, the latest commanded encoder-velocity reference and
+one visual-sample table. Offline preprocessing can
 therefore estimate timing offsets and interpolate encoder position at camera
 timestamps instead of treating callback arrival order as exact synchronization.
 The calibration, excitation, hysteresis-test, split, and validation protocol is

@@ -12,7 +12,12 @@ import numpy as np
 from sklearn.exceptions import ConvergenceWarning
 from sklearn.neural_network import MLPRegressor
 
-from .dataset import arrays, load_sessions
+from .dataset import (
+    arrays,
+    balance_q_bins,
+    load_sessions,
+    select_motion_direction,
+)
 from .model import NumpyMlpModel
 
 
@@ -36,14 +41,49 @@ def train_model(
     random_seed: int,
     maximum_iterations: int,
     camera_to_motor_offset_ms: float = 0.0,
+    direction: str = 'all',
+    command_to_q_sign: int = -1,
+    q_bin_width: float = 0.0,
+    maximum_samples_per_session_bin: int = 0,
+    encoder_zero_raw: int | None = None,
 ) -> tuple[NumpyMlpModel, dict]:
     """Fit an MLP and evaluate it only on held-out complete sessions."""
+    train_paths = {str(Path(value).resolve()) for value in train_sessions}
+    validation_paths = {
+        str(Path(value).resolve()) for value in validation_sessions
+    }
+    overlap = sorted(train_paths & validation_paths)
+    if overlap:
+        raise ValueError(
+            f'train and validation sessions overlap: {overlap}'
+        )
     train_data = load_sessions(
-        train_sessions, arm_name, camera_to_motor_offset_ms
+        train_sessions,
+        arm_name,
+        camera_to_motor_offset_ms,
+        encoder_zero_raw,
     )
     validation_data = load_sessions(
-        validation_sessions, arm_name, camera_to_motor_offset_ms
+        validation_sessions,
+        arm_name,
+        camera_to_motor_offset_ms,
+        encoder_zero_raw,
     )
+    train_data = select_motion_direction(
+        train_data, direction, command_to_q_sign
+    )
+    validation_data = select_motion_direction(
+        validation_data, direction, command_to_q_sign
+    )
+    unbalanced_train_rows = len(train_data)
+    if q_bin_width > 0.0 or maximum_samples_per_session_bin > 0:
+        if q_bin_width <= 0.0 or maximum_samples_per_session_bin <= 0:
+            raise ValueError(
+                'q bin width and maximum samples must both be enabled'
+            )
+        train_data = balance_q_bins(
+            train_data, q_bin_width, maximum_samples_per_session_bin
+        )
     q_train, x_train = arrays(train_data)
     q_validation, x_validation = arrays(validation_data)
 
@@ -90,6 +130,7 @@ def train_model(
         for value in q_validation[:, 0]
     ])
     errors = predictions - x_validation
+    absolute_errors = np.abs(errors)
     rmse_per_component = np.sqrt(np.mean(errors * errors, axis=0))
     metrics = {
         'arm': arm_name,
@@ -99,7 +140,15 @@ def train_model(
             str(Path(value)) for value in validation_sessions
         ],
         'train_rows': int(len(train_data)),
+        'unbalanced_train_rows': int(unbalanced_train_rows),
         'validation_rows': int(len(validation_data)),
+        'direction': direction,
+        'command_to_q_sign': command_to_q_sign,
+        'q_bin_width': q_bin_width,
+        'maximum_samples_per_session_bin': (
+            maximum_samples_per_session_bin
+        ),
+        'encoder_zero_raw': encoder_zero_raw,
         'hidden_widths': list(hidden_widths),
         'random_seed': random_seed,
         'camera_to_motor_offset_ms': camera_to_motor_offset_ms,
@@ -108,6 +157,22 @@ def train_model(
         'loss': float(estimator.loss_),
         'validation_rmse_components': rmse_per_component.tolist(),
         'validation_rmse_total': float(np.sqrt(np.mean(errors * errors))),
+        'validation_p95_components': np.percentile(
+            absolute_errors, 95, axis=0
+        ).tolist(),
+        'validation_p95_total': float(np.percentile(absolute_errors, 95)),
+        'validation_max_components': np.max(
+            absolute_errors, axis=0
+        ).tolist(),
+        'validation_max_total': float(np.max(absolute_errors)),
+        'train_q_range': [float(np.min(q_train)), float(np.max(q_train))],
+        'validation_q_range': [
+            float(np.min(q_validation)), float(np.max(q_validation))
+        ],
+        'validation_extrapolation_fraction': float(np.mean(
+            (q_validation[:, 0] < np.min(q_train))
+            | (q_validation[:, 0] > np.max(q_train))
+        )),
     }
     return model, metrics
 
@@ -123,6 +188,21 @@ def main(args=None) -> None:
     parser.add_argument('--seed', type=int, default=7)
     parser.add_argument('--max-iterations', type=int, default=2000)
     parser.add_argument('--camera-to-motor-offset-ms', type=float, default=0.0)
+    parser.add_argument(
+        '--direction', choices=('all', 'increasing', 'decreasing'),
+        default='all',
+    )
+    parser.add_argument(
+        '--command-to-q-sign', type=int, choices=(-1, 1), default=-1
+    )
+    parser.add_argument('--q-bin-width', type=float, default=0.0)
+    parser.add_argument(
+        '--maximum-samples-per-session-bin', type=int, default=0
+    )
+    parser.add_argument(
+        '--encoder-zero-raw', type=int,
+        help='common physical-home raw count; overrides per-session zero',
+    )
     options = parser.parse_args(args)
     model, metrics = train_model(
         options.train_session,
@@ -132,6 +212,11 @@ def main(args=None) -> None:
         options.seed,
         options.max_iterations,
         options.camera_to_motor_offset_ms,
+        options.direction,
+        options.command_to_q_sign,
+        options.q_bin_width,
+        options.maximum_samples_per_session_bin,
+        options.encoder_zero_raw,
     )
     model.save(options.output, metadata={'training': metrics})
     print(json.dumps(metrics, indent=2))

@@ -8,18 +8,18 @@ raw_session_paths: []
 hardware:
   board: "Bluno / ATmega328P"
   h_bridge: "Makerfabs H-Bridge Motor Shield v1.0"
-  firmware: "bluno_motor_controller v2"
+  firmware: "bluno_motor_controller v3"
   supply_voltage_v: null
   supply_current_limit_a: null
   arm_configuration_notes: ""
 
 camera:
-  serial: "201623028735"
-  rgb_device: "/dev/video8"
-  resolution: [1920, 1080]
+  serial: "152122077644"
+  rgb_device: "librealsense RGB-D"
+  resolution: [1280, 720]
   fps: 30.0
   aruco_dictionary: "DICT_4X4_50"
-  coordinate_frame: "projective_base_marker"
+  coordinate_frame: "metric_robot_base_3d"
   camera_time_offset_ms: null
   camera_time_jitter_ms: null
 
@@ -41,8 +41,8 @@ axes:
     shield_channel: "M2"
     encoder_pins: [2, 3]
     current_adc_pin: "A0"
-    command_sign_for_contraction: null
-    encoder_sign_for_contraction: -1
+    command_sign_for_contraction: -1
+    encoder_sign_for_contraction: 1
     home_definition: ""
     operational_range_counts: [null, null]
     encoder_counts_per_motor_revolution: null

@@ -9,6 +9,8 @@ bluno_motor_bridge:
 
     # Initial M2 bench-test limit; supply current limit is set independently.
     max_abs_command: 255
+    max_relative_step_counts: 10
+    relative_step_timeout_s: 3.5
 
     # Both physical primary motors are handled by the same Bluno/shield.
     active_axes: [true, true]
@@ -24,5 +26,13 @@ bluno_motor_bridge:
     axis_1_encoder_cpr: -1
     axis_0_gear_ratio: 9.7
     axis_1_gear_ratio: -1.0
-    axis_0_current_sensitivity_v_per_a: -1.0
-    axis_1_current_sensitivity_v_per_a: -1.0
+    # ACS712-30A nominal calibration. Zero offsets measured with both outputs
+    # disabled on 2026-09-23; sign follows the sensor IP+/IP- orientation.
+    axis_0_current_sensitivity_v_per_a: 0.066
+    axis_1_current_sensitivity_v_per_a: 0.066
+    current_zero_adc: [517.0, 515.0]
+    current_polarity: [1, 1]
+    adc_reference_voltage_v: 5.0
+    auto_current_zero: true
+    auto_current_zero_samples: 25
+    current_deadband_adc_counts: 1.0

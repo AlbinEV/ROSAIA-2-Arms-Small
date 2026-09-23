@@ -13,6 +13,10 @@ data/calibration/
 data/encoder_range/*.csv
 data/excitation_profiles/
 data/sessions/
+# Generated training candidates and reproducible quality reports. Promote only
+# explicitly approved model artifacts to a versioned release directory.
+data/models/
+data/reports/
 
 # Python
 __pycache__/

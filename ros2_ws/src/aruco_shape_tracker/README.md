@@ -18,11 +18,18 @@ small square. The z coordinate is retained for planarity diagnostics. The
 recorder and learning pipeline continue to consume x and y, so their six-state
 API is unchanged.
 
+Markers 0 and 1 are rigid ground references. At startup they must both remain
+visible for `reference_lock_frames` valid RGB-D frames. Their median 3-D
+origins and shared rotation are then frozen; subsequent state publication no
+longer requires either ground marker to remain visible. The three moving
+markers of the relevant arm are still required in every published sample.
+
 A constant-velocity 3-D Kalman filter stabilizes each measured marker. The
-tracker never publishes prediction-only samples: a training sample is emitted
-only when the base and all three moving markers have valid RGB-D measurements
-in the current frameset. Its initial noise values come from the stationary
-test and must be refined during calibration.
+tracker never publishes prediction-only moving-marker samples: a training
+sample is emitted only when all three moving markers have valid RGB-D
+measurements in the current frameset and the ground frame has already locked.
+Its initial noise values come from the stationary test and must be refined
+during calibration.
 
 | Topic | Type | Meaning |
 |---|---|---|

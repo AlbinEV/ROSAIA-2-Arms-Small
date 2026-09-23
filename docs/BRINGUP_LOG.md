@@ -444,5 +444,70 @@ origin for each arm. Live values then became symmetric and physically
 plausible: distal y was 0.547 m and 0.539 m, with local z -0.027 m and -0.045 m
 for arms 1 and 2 respectively. The ROS state rate increased from about 22.5 Hz
 to 28.6 Hz by skipping annotated JPEG encoding when no viewer is subscribed.
-Arm-plane
-offset/normal and final Kalman covariances remain calibration outputs.
+Arm-plane offset/normal and final Kalman covariances remain calibration outputs.
+
+Before home/range acquisition, firmware protocol version 3 and recorder schema
+version 3 were prepared. Firmware telemetry now includes both commands actually
+present at the PWM outputs after local limit/watchdog logic. The recorder takes
+the first valid encoder pair as the explicit session zero, writes it into
+metadata and every visual row, and the learning loader subtracts it during
+timestamp alignment. This removes the previous ambiguity caused by USB reset
+and by logging the requested ROS command after firmware had already stopped.
+
+### First powered arm-1 range cycle
+
+The powered calibration used 6.75 V with a 7 A aggregate supply limit shared
+by both motors. At home, power-off and power-on ADC baselines were identical:
+A0=516 and A1=514, with both encoders stationary. An axis-0 contraction request
+bounded to 5 counts at PWM 120 did not break away in 2.98 s; raw encoder motion
+was only 0--2 counts and filtered A0 fell to 480 from a 515 baseline.
+
+At PWM 200, negative M2 command produced visible contraction. A subsequent
+cycle moved raw axis 0 from -2 to +12 and an opposite PWM-160 bounded move
+returned it exactly to raw zero. The operator confirmed the physical
+contraction. Therefore arm 1 uses contraction coordinate `q0=encoder0_raw`,
+with negative command increasing q0. Firmware position-limit signs and all ROS
+recorder/model configurations were updated accordingly; arm 2 remains
+provisional at `q1=-encoder1_raw`.
+
+A non-actuating arm-1 velocity reference was added for the requested cycle:
+10 s outward with a 3 s rise, 4 s plateau and 3 s fall, peak 30 counts/s
+(210-count outward area), 1 s dwell, then a sign-reversed 10 s return. The
+complete cycle contains 1051 samples at 50 Hz, lasts 21 s and integrates to
+zero net encoder displacement. Execution awaits the encoder-velocity loop; it
+is intentionally not mapped directly to PWM because measured breakaway is
+strongly nonlinear.
+
+### First closed-loop arm-1 velocity cycle
+
+The 21 s trapezoidal reference was executed from encoder home with axis 1 held
+at zero. The first invocation exposed a ROS node API name collision in the
+profile player (`publishers` is a read-only `Node` property); no reference was
+published and no motor moved. Renaming the member to `reference_publishers`
+fixed the player before the powered run.
+
+The completed run reached `q0=256` counts and returned to `q0=1`, while axis 1
+remained at zero throughout. The applied axis-0 PWM and ADC ranges were
+-166--+149 and 478--555 counts respectively; the idle ADC baseline was about
+516. Firmware flags were 16 (unknown current scale) except for 75 samples with
+flag 80, which is flag 16 plus the expected lower position-limit clamp after
+the return reached home. The controller subsequently published zero PWM.
+
+RGB-D recording remained complete for both arms at approximately 21.7 Hz per
+arm during the run. At peak encoder contraction, the three arm-1 marker
+displacement norms relative to the initial home sample were approximately
+41.7, 92.0 and 21.2 mm. The session is stored locally as
+`data/sessions/velocity_arm1_trapezoid01_20260922` (ignored by Git). Before
+collecting the training excitation set, an explicit velocity-reference field
+was added to recorder schema 4. The controller was also updated with
+direction-change integral reset and conditional-integration anti-windup. An
+initial 2-count directional guard removed command chatter but allowed inertial
+coast to q=-3 and q=303; the measured 6-count coast led to a 10-count guard at
+both position limits.
+
+The follow-up cycle with the 10-count guard reached raw operational `q0=300`
+(302 session-relative counts because the recorder started at raw -2), stopped
+without chatter, and left axis 1 at zero. Release stopped at raw q0=10 by
+design. Firmware-bounded calibration moves then returned it to raw q0=2. This
+also reconfirmed that STEP delta sign selects motor direction, not operational
+q direction: positive axis-0 STEP releases and negative STEP contracts.

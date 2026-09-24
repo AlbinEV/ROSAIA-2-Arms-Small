@@ -82,6 +82,22 @@ The helper `scripts/rosaia.sh` also provides build, test, bridge, vision,
 excitation generation, MLP training, learned-Jacobian inference, status,
 preview, visualization, and stop commands.
 
+Open the live two-arm dashboard with:
+
+```bash
+scripts/rosaia.sh dashboard
+```
+
+It displays ArUco shapes, encoders, currents and applied PWM at
+`http://127.0.0.1:8765`. Goal publication is disabled by default. Candidate
+models can be loaded for non-actuating reachable-shape projection with:
+
+```bash
+scripts/rosaia.sh dashboard \
+  arm_1_model:=$PWD/data/models/arm1_candidate \
+  arm_2_model:=$PWD/data/models/arm2_candidate
+```
+
 The shape controller does not publish `motor_command`; it produces bounded
 encoder-velocity references for the future low-level velocity loop.
 

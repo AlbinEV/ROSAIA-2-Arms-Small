@@ -240,6 +240,19 @@ scripts/rosaia.sh jacobian
 ros2 topic echo /jacobian_model/status
 ros2 topic echo /arm_1/jacobian</code></pre>
     <p>Specifica completa: <a style="color:var(--blue)" href="TRAINING_PIPELINE.md">TRAINING_PIPELINE.md</a>.</p>
+    <h3>Dashboard e proiezione della forma desiderata</h3>
+    <pre><code># Telemetria e deformate correnti, senza modello e senza attuazione
+scripts/rosaia.sh dashboard
+
+# Preview di inferenza con due modelli candidati: pubblicazione goal ancora OFF
+scripts/rosaia.sh dashboard \
+  arm_1_model:=$PWD/data/models/arm1_candidate \
+  arm_2_model:=$PWD/data/models/arm2_candidate</code></pre>
+    <p>Aprire <code>http://127.0.0.1:8765</code>. I marker arancioni definiscono la
+      deformata richiesta; il profilo verde è la sua proiezione sulla varietà
+      monodimensionale appresa <code>x=f(q)</code>. L’abilitazione
+      <code>enable_goal_publish:=true</code> va usata soltanto dopo promozione dei
+      modelli e validazione offline del controllore.</p>
   </section>
 
   <section id="stop">

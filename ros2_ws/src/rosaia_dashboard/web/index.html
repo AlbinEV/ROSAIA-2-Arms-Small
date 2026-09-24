@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>ROSAIA Shape Control</title>
+  <style>
+    :root { color-scheme: dark; --bg:#081018; --panel:#111d28; --line:#294154;
+      --text:#dceaf2; --muted:#7f9aaa; --live:#42d4f4; --goal:#ffad42;
+      --fit:#59e391; --bad:#ff6174; }
+    * { box-sizing:border-box; }
+    body { margin:0; font-family:Inter,system-ui,sans-serif; background:var(--bg);
+      color:var(--text); }
+    header { display:flex; align-items:center; justify-content:space-between;
+      padding:18px 24px; border-bottom:1px solid var(--line); }
+    h1 { margin:0; font-size:20px; letter-spacing:.04em; }
+    #health { color:var(--muted); font-variant-numeric:tabular-nums; }
+    main { padding:18px; max-width:1500px; margin:auto; }
+    .telemetry { display:grid; grid-template-columns:repeat(4,minmax(150px,1fr));
+      gap:12px; margin-bottom:16px; }
+    .card,.arm { background:var(--panel); border:1px solid var(--line);
+      border-radius:12px; padding:14px; }
+    .label { color:var(--muted); font-size:12px; text-transform:uppercase;
+      letter-spacing:.08em; }
+    .value { margin-top:7px; font-size:18px; font-variant-numeric:tabular-nums; }
+    .arms { display:grid; grid-template-columns:repeat(2,minmax(420px,1fr)); gap:16px; }
+    .arm-head { display:flex; justify-content:space-between; align-items:center; }
+    h2 { margin:0; font-size:17px; }
+    canvas { width:100%; aspect-ratio:1/1.15; display:block; margin:10px 0;
+      border-radius:8px; background:#09131c; touch-action:none; }
+    .legend { display:flex; gap:18px; color:var(--muted); font-size:12px; }
+    .dot { display:inline-block; width:9px; height:9px; border-radius:50%;
+      margin-right:5px; }
+    button { border:1px solid var(--line); background:#192b3a; color:var(--text);
+      border-radius:7px; padding:8px 11px; cursor:pointer; }
+    button:hover { border-color:var(--live); }
+    button:disabled { opacity:.35; cursor:not-allowed; }
+    .controls { display:flex; flex-wrap:wrap; gap:8px; margin-top:10px; }
+    .detail { min-height:20px; margin-top:10px; color:var(--muted);
+      font:12px ui-monospace,monospace; }
+    .warn { color:var(--bad); }
+    @media(max-width:900px) { .arms,.telemetry { grid-template-columns:1fr; } }
+  </style>
+</head>
+<body>
+  <header><h1>ROSAIA · Two-arm shape control</h1><div id="health">connessione…</div></header>
+  <main>
+    <section class="telemetry">
+      <div class="card"><div class="label">Encoder q raw</div><div class="value" id="enc">—</div></div>
+      <div class="card"><div class="label">Corrente</div><div class="value" id="cur">—</div></div>
+      <div class="card"><div class="label">PWM applicato</div><div class="value" id="pwm">—</div></div>
+      <div class="card"><div class="label">Visione</div><div class="value" id="vision">—</div></div>
+    </section>
+    <section class="arms">
+      <article class="arm" data-arm="arm_1">
+        <div class="arm-head"><h2>Arm 1</h2><span class="label model">modello —</span></div>
+        <canvas width="520" height="600"></canvas>
+        <div class="legend"><span><i class="dot" style="background:var(--live)"></i>attuale</span>
+          <span><i class="dot" style="background:var(--goal)"></i>richiesta</span>
+          <span><i class="dot" style="background:var(--fit)"></i>realizzabile</span></div>
+        <div class="controls"><button class="copy">Copia attuale</button>
+          <button class="project">Proietta</button><button class="publish">Pubblica goal</button></div>
+        <div class="detail">Trascina i marker arancioni per impostare la forma.</div>
+      </article>
+      <article class="arm" data-arm="arm_2">
+        <div class="arm-head"><h2>Arm 2</h2><span class="label model">modello —</span></div>
+        <canvas width="520" height="600"></canvas>
+        <div class="legend"><span><i class="dot" style="background:var(--live)"></i>attuale</span>
+          <span><i class="dot" style="background:var(--goal)"></i>richiesta</span>
+          <span><i class="dot" style="background:var(--fit)"></i>realizzabile</span></div>
+        <div class="controls"><button class="copy">Copia attuale</button>
+          <button class="project">Proietta</button><button class="publish">Pubblica goal</button></div>
+        <div class="detail">Trascina i marker arancioni per impostare la forma.</div>
+      </article>
+    </section>
+  </main>
+  <script>
+    const local = {arm_1:{requested:null,drag:-1}, arm_2:{requested:null,drag:-1}};
+    let latest = null;
+    const bounds = {xmin:-0.22,xmax:0.22,ymin:0.0,ymax:0.65};
+    const xy = (p,c) => [(p.x-bounds.xmin)/(bounds.xmax-bounds.xmin)*c.width,
+      c.height-(p.y-bounds.ymin)/(bounds.ymax-bounds.ymin)*c.height];
+    const world = (x,y,c) => ({x:bounds.xmin+x/c.width*(bounds.xmax-bounds.xmin),
+      y:bounds.ymin+(c.height-y)/c.height*(bounds.ymax-bounds.ymin),z:0});
+    function chain(ctx,c,points,color,dash=[]){
+      if(!points) return; ctx.strokeStyle=color; ctx.fillStyle=color; ctx.lineWidth=3;
+      ctx.setLineDash(dash); ctx.beginPath(); const base=xy({x:0,y:0},c); ctx.moveTo(...base);
+      points.forEach(p=>ctx.lineTo(...xy(p,c))); ctx.stroke(); ctx.setLineDash([]);
+      points.forEach((p,i)=>{const v=xy(p,c);ctx.beginPath();ctx.arc(v[0],v[1],8,0,7);
+        ctx.fill();ctx.fillStyle='#071018';ctx.fillText(String(i+1),v[0]-3,v[1]+4);ctx.fillStyle=color;});
+    }
+    function draw(article,arm){
+      const c=article.querySelector('canvas'),ctx=c.getContext('2d'); ctx.clearRect(0,0,c.width,c.height);
+      ctx.strokeStyle='#1d3444';ctx.lineWidth=1;
+      for(let y=0;y<=.6;y+=.1){const a=xy({x:bounds.xmin,y},c),b=xy({x:bounds.xmax,y},c);
+        ctx.beginPath();ctx.moveTo(...a);ctx.lineTo(...b);ctx.stroke();}
+      const state=latest?.arms?.[arm]; const current=state?.current?.points;
+      const requested=local[arm].requested||state?.requested?.points;
+      chain(ctx,c,current,'#42d4f4');chain(ctx,c,requested,'#ffad42',[7,5]);
+      chain(ctx,c,state?.feasible?.points,'#59e391',[3,4]);
+      const model=article.querySelector('.model');
+      if(state?.model?.available){const tag=state.model.approved?'approvato':'candidato';
+        const fit=state.model.converged===false?' · non convergente':'';
+        model.textContent=`${tag}${fit} · RMSE ${state.model.validation_rmse_mm?.toFixed(1)??'—'} mm · q ${state.model.q_min.toFixed(0)}…${state.model.q_max.toFixed(0)}`;
+      }else model.textContent='modello non caricato';
+      article.querySelector('.project').disabled=!state?.model?.available;
+      article.querySelector('.publish').disabled=!latest?.goal_publish_enabled||!state?.model?.approved;
+      if(state?.projection) article.querySelector('.detail').textContent=
+        `q*=${state.projection.q.toFixed(2)} · residuo=${(1000*state.projection.weighted_error_m).toFixed(2)} mm`;
+    }
+    function setTelemetry(s){
+      const m=s.motor||{}; document.querySelector('#enc').textContent=(m.encoder_counts||['—','—']).join(' / ');
+      document.querySelector('#cur').textContent=(m.current_a_host||[]).map(v=>`${Number(v).toFixed(2)} A`).join(' / ')||'—';
+      document.querySelector('#pwm').textContent=(m.applied_commands||['—','—']).join(' / ');
+      const v=s.vision||{};document.querySelector('#vision').textContent=(v.complete_arms||[]).join(', ')||'incompleta';
+      document.querySelector('#health').textContent=`frame ${v.frame??'—'} · ground ${v.reference_frame_locked?'locked':'waiting'} · goal ${s.goal_publish_enabled?'ENABLED':'disabled'}`;
+    }
+    async function update(){try{const r=await fetch('/api/state');latest=await r.json();setTelemetry(latest);
+      document.querySelectorAll('.arm').forEach(a=>draw(a,a.dataset.arm));}catch(e){document.querySelector('#health').textContent='dashboard offline';}}
+    async function project(arm,publish){const points=local[arm].requested;
+      if(!points)return;const r=await fetch('/api/goal',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({arm,points,publish})});const out=await r.json();
+      const a=document.querySelector(`[data-arm="${arm}"]`);if(!r.ok){a.querySelector('.detail').innerHTML=`<span class="warn">${out.error}</span>`;}await update();}
+    document.querySelectorAll('.arm').forEach(a=>{const arm=a.dataset.arm,c=a.querySelector('canvas');
+      a.querySelector('.copy').onclick=()=>{const p=latest?.arms?.[arm]?.current?.points;if(p)local[arm].requested=structuredClone(p);draw(a,arm);};
+      a.querySelector('.project').onclick=()=>project(arm,false);a.querySelector('.publish').onclick=()=>project(arm,true);
+      c.onpointerdown=e=>{const pts=local[arm].requested;if(!pts)return;const r=c.getBoundingClientRect(),x=(e.clientX-r.left)*c.width/r.width,y=(e.clientY-r.top)*c.height/r.height;
+        let best=-1,dist=1e9;pts.forEach((p,i)=>{const v=xy(p,c),d=(v[0]-x)**2+(v[1]-y)**2;if(d<dist){dist=d;best=i;}});if(dist<900){local[arm].drag=best;c.setPointerCapture(e.pointerId);}};
+      c.onpointermove=e=>{if(local[arm].drag<0)return;const r=c.getBoundingClientRect(),x=(e.clientX-r.left)*c.width/r.width,y=(e.clientY-r.top)*c.height/r.height;
+        const p=world(x,y,c);p.z=local[arm].requested[local[arm].drag].z||0;local[arm].requested[local[arm].drag]=p;draw(a,arm);};
+      c.onpointerup=()=>local[arm].drag=-1;});
+    setInterval(update,200);update();
+  </script>
+</body>
+</html>

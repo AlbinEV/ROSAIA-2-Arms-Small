@@ -30,6 +30,7 @@ Commands:
   train [ARGS]          Train one MLP from complete recorded sessions
   jacobian [ARGS]       Publish learned Jacobians from encoder positions
   controller            Start the non-actuating shape controller
+  dashboard             Open the multimodal web dashboard backend
   view                  Open the annotated image with rqt_image_view
   status                Show devices, relevant nodes and topic rates
   stop                  Publish a zero command once
@@ -95,6 +96,10 @@ case "$command" in
   controller)
     source_ros
     exec ros2 launch rosaia_shape_control shape_controller.launch.py "$@"
+    ;;
+  dashboard)
+    source_ros
+    exec ros2 launch rosaia_dashboard dashboard.launch.py "$@"
     ;;
   view)
     source_ros

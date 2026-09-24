@@ -1,0 +1,12 @@
+rosaia_dashboard:
+  ros__parameters:
+    host: "127.0.0.1"
+    port: 8765
+    arm_names: ["arm_1", "arm_2"]
+    state_topics: ["/arm_1/aruco_state", "/arm_2/aruco_state"]
+    goal_topics: ["/arm_1/shape_goal", "/arm_2/shape_goal"]
+    # Populate only with models promoted after held-out Jacobian validation.
+    model_directories: ["", ""]
+    arm_1_model_directory: ""
+    arm_2_model_directory: ""
+    enable_goal_publish: false

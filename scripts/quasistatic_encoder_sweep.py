@@ -68,9 +68,18 @@ class SweepNode(Node):
 
     def move_step(self, operational_counts: int) -> None:
         """Request one bounded step and wait for encoder settling."""
-        raw_counts = self.options.encoder_sign * operational_counts
+        signed_count_limit = (
+            self.options.command_to_q_sign * operational_counts
+        )
+        if operational_counts > 0:
+            pwm = self.options.pwm
+            for threshold, scheduled_pwm in self.options.pwm_schedule:
+                if self.q >= threshold:
+                    pwm = scheduled_pwm
+        else:
+            pwm = self.options.reverse_pwm
         message = Int16MultiArray(data=[
-            self.options.axis, raw_counts, self.options.pwm
+            self.options.axis, signed_count_limit, pwm
         ])
         start_q = self.q
         self.publisher.publish(message)
@@ -101,10 +110,15 @@ class SweepNode(Node):
         """Reach one target through steps no larger than the firmware bound."""
         if not self.options.minimum_q <= target <= self.options.maximum_q:
             raise ValueError(f'target {target} is outside the calibrated range')
-        while abs(target - self.q) > self.options.tolerance:
+        initial_error = target - self.q
+        if abs(initial_error) <= self.options.tolerance:
+            direction = 0
+        else:
+            direction = 1 if initial_error > 0 else -1
+        while direction * (target - self.q) > self.options.tolerance:
             error = target - self.q
             magnitude = min(abs(error), self.options.step_counts)
-            self.move_step(magnitude if error > 0 else -magnitude)
+            self.move_step(direction * magnitude)
         print(f'target={target}, settled_q={self.q}', flush=True)
         deadline = time.monotonic() + self.options.dwell
         while time.monotonic() < deadline:
@@ -116,15 +130,42 @@ def arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--axis', type=int, choices=(0, 1), required=True)
     parser.add_argument('--encoder-sign', type=int, choices=(-1, 1), required=True)
+    parser.add_argument(
+        '--command-to-q-sign', type=int, choices=(-1, 1), default=-1
+    )
     parser.add_argument('--points', default='0,20,40,60,80,100,120')
     parser.add_argument('--step-counts', type=int, default=5)
     parser.add_argument('--pwm', type=int, required=True)
+    parser.add_argument(
+        '--pwm-schedule', default='',
+        help='optional increasing-q schedule such as 0:130,180:170',
+    )
+    parser.add_argument(
+        '--reverse-pwm', type=int,
+        help='PWM used while returning toward home; defaults to --pwm',
+    )
     parser.add_argument('--dwell', type=float, default=1.0)
     parser.add_argument('--tolerance', type=int, default=1)
     parser.add_argument('--step-timeout', type=float, default=3.0)
     parser.add_argument('--minimum-q', type=int, default=0)
     parser.add_argument('--maximum-q', type=int, default=280)
+    parser.add_argument(
+        '--return-only', action='store_true',
+        help='start from the current position and visit points in reverse',
+    )
+    parser.add_argument(
+        '--outbound-only', action='store_true',
+        help='resume increasing targets from the current position',
+    )
     options = parser.parse_args()
+    options.pwm_schedule = [] if not options.pwm_schedule else [
+        tuple(int(item) for item in value.split(':'))
+        for value in options.pwm_schedule.split(',')
+    ]
+    if options.return_only and options.outbound_only:
+        raise ValueError('return-only and outbound-only are mutually exclusive')
+    if options.reverse_pwm is None:
+        options.reverse_pwm = options.pwm
     options.points = [int(value) for value in options.points.split(',')]
     if not options.points or options.points[0] != 0:
         raise ValueError('points must start at the current home q=0')
@@ -132,8 +173,20 @@ def arguments() -> argparse.Namespace:
         raise ValueError('points must be unique and increasing')
     if not 1 <= options.step_counts <= 10:
         raise ValueError('step-counts must be in firmware range 1..10')
-    if not 1 <= options.pwm <= 255 or options.dwell < 0.0:
+    if (
+        not 1 <= options.pwm <= 255
+        or not 1 <= options.reverse_pwm <= 255
+        or options.dwell < 0.0
+    ):
         raise ValueError('invalid PWM or dwell')
+    if any(
+        len(item) != 2 or not 0 <= item[0] <= options.maximum_q
+        or not 1 <= item[1] <= 255
+        for item in options.pwm_schedule
+    ):
+        raise ValueError('invalid PWM schedule')
+    if options.pwm_schedule != sorted(options.pwm_schedule):
+        raise ValueError('PWM schedule thresholds must increase')
     return options
 
 
@@ -144,9 +197,21 @@ def main() -> None:
     node = SweepNode(options)
     try:
         node.wait_ready()
-        if abs(node.q) > options.tolerance:
+        if (
+            not options.return_only
+            and not options.outbound_only
+            and abs(node.q) > options.tolerance
+        ):
             raise RuntimeError(f'sweep must start from home, current q={node.q}')
-        targets = options.points + list(reversed(options.points[:-1]))
+        if options.return_only:
+            targets = list(reversed(options.points))
+        elif options.outbound_only:
+            targets = [
+                value for value in options.points
+                if value >= node.q - options.tolerance
+            ]
+        else:
+            targets = options.points + list(reversed(options.points[:-1]))
         for target in targets:
             node.move_to(target)
         print(f'sweep complete; final q={node.q}', flush=True)

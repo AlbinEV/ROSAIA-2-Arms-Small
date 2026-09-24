@@ -133,9 +133,11 @@ counts, followed by a dwell at the requested position:
 
 ```bash
 # Run together with a named recorder session. Axis 1 uses encoder sign -1.
-scripts/rosaia.sh sweep --axis 0 --encoder-sign 1 --pwm 120 \
+scripts/rosaia.sh sweep --axis 0 --encoder-sign 1 \
+  --command-to-q-sign -1 --pwm 80 --reverse-pwm 75 \
   --points 0,20,40,60,80,100,120 --step-counts 5 --dwell 1
-scripts/rosaia.sh sweep --axis 1 --encoder-sign -1 --pwm 100 \
+scripts/rosaia.sh sweep --axis 1 --encoder-sign -1 \
+  --command-to-q-sign -1 --pwm 90 --reverse-pwm 80 \
   --points 0,20,40,60,80,100,120 --step-counts 5 --dwell 1
 ```
 
@@ -226,6 +228,7 @@ scripts/rosaia.sh train \
   --train-session data/sessions/arm1_quasistatic_train_02 \
   --validation-session data/sessions/arm1_quasistatic_validation_01 \
   --arm arm_1 --hidden 32,32 --camera-to-motor-offset-ms 0 \
+  --minimum-q 0 --maximum-q 120 \
   --output data/models/arm1_mlp_v1
 ```
 

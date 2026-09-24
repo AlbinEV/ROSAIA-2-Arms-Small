@@ -46,6 +46,8 @@ def train_model(
     q_bin_width: float = 0.0,
     maximum_samples_per_session_bin: int = 0,
     encoder_zero_raw: int | None = None,
+    minimum_q: float | None = None,
+    maximum_q: float | None = None,
 ) -> tuple[NumpyMlpModel, dict]:
     """Fit an MLP and evaluate it only on held-out complete sessions."""
     train_paths = {str(Path(value).resolve()) for value in train_sessions}
@@ -75,6 +77,30 @@ def train_model(
     validation_data = select_motion_direction(
         validation_data, direction, command_to_q_sign
     )
+    if (
+        minimum_q is not None
+        and maximum_q is not None
+        and minimum_q > maximum_q
+    ):
+        raise ValueError('minimum q cannot exceed maximum q')
+    train_rows_before_range_filter = len(train_data)
+    validation_rows_before_range_filter = len(validation_data)
+    if minimum_q is not None:
+        train_data = train_data.loc[
+            train_data['q_operational'] >= minimum_q
+        ].copy()
+        validation_data = validation_data.loc[
+            validation_data['q_operational'] >= minimum_q
+        ].copy()
+    if maximum_q is not None:
+        train_data = train_data.loc[
+            train_data['q_operational'] <= maximum_q
+        ].copy()
+        validation_data = validation_data.loc[
+            validation_data['q_operational'] <= maximum_q
+        ].copy()
+    if len(train_data) < 20 or len(validation_data) < 20:
+        raise ValueError('q-range filter leaves fewer than 20 rows')
     unbalanced_train_rows = len(train_data)
     if q_bin_width > 0.0 or maximum_samples_per_session_bin > 0:
         if q_bin_width <= 0.0 or maximum_samples_per_session_bin <= 0:
@@ -149,6 +175,12 @@ def train_model(
             maximum_samples_per_session_bin
         ),
         'encoder_zero_raw': encoder_zero_raw,
+        'minimum_q': minimum_q,
+        'maximum_q': maximum_q,
+        'train_rows_before_range_filter': train_rows_before_range_filter,
+        'validation_rows_before_range_filter': (
+            validation_rows_before_range_filter
+        ),
         'hidden_widths': list(hidden_widths),
         'random_seed': random_seed,
         'camera_to_motor_offset_ms': camera_to_motor_offset_ms,
@@ -203,6 +235,8 @@ def main(args=None) -> None:
         '--encoder-zero-raw', type=int,
         help='common physical-home raw count; overrides per-session zero',
     )
+    parser.add_argument('--minimum-q', type=float)
+    parser.add_argument('--maximum-q', type=float)
     options = parser.parse_args(args)
     model, metrics = train_model(
         options.train_session,
@@ -217,6 +251,8 @@ def main(args=None) -> None:
         options.q_bin_width,
         options.maximum_samples_per_session_bin,
         options.encoder_zero_raw,
+        options.minimum_q,
+        options.maximum_q,
     )
     model.save(options.output, metadata={'training': metrics})
     print(json.dumps(metrics, indent=2))

@@ -1,5 +1,8 @@
 encoder_velocity_controller:
   ros__parameters:
+    # These schedules were identified at 6.75 V. Do not use them with the
+    # nominal 5.6 V transformer; the 2026-09-24 recalibration showed a sharp
+    # breakaway transition and requires a new closed-loop fit.
     control_rate_hz: 100.0
     reference_topics:
       ["/arm_1/encoder_velocity_reference", "/arm_2/encoder_velocity_reference"]

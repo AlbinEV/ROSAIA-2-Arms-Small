@@ -9,3 +9,7 @@ session_recorder:
     encoder_signs: [1, -1]
     maximum_telemetry_age_ms: 100.0
     flush_every_rows: 30
+    motor_supply_voltage_v: 5.6
+    # Negative means that the transformer/current limit is not yet measured.
+    motor_supply_current_limit_a: -1.0
+    motor_supply_source: "5.6 V transformer"

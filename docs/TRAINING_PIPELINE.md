@@ -72,6 +72,11 @@ motion gate while remaining useful to estimate stationary visual noise.
 
 ## Dataset acquisition
 
+The nominal motor supply from 2026-09-24 onward is the 5.6 V transformer.
+Every newly recorded session stores this value in `metadata.json`. A negative
+current-limit value means that the transformer's limit has not yet been
+measured; it must not be interpreted as unlimited current.
+
 `rosaia_data_acquisition/session_recorder` writes one session directory:
 
 ```text
@@ -120,6 +125,23 @@ Use independent, bounded trajectories, beginning with one arm stationary:
 Coverage should be evaluated in `(q, q_dot, direction)` bins rather than by row
 count. Stationary dwell segments are retained to estimate visual noise and
 relaxation, but they must not dominate the training loss.
+
+At 5.6 V the measured breakaway transition, especially on arm 2, is too sharp
+for the previous 6.75 V velocity schedule. The next datasets therefore use
+firmware-bounded quasi-static increments. Each command is at most 5 encoder
+counts, followed by a dwell at the requested position:
+
+```bash
+# Run together with a named recorder session. Axis 1 uses encoder sign -1.
+scripts/rosaia.sh sweep --axis 0 --encoder-sign 1 --pwm 120 \
+  --points 0,20,40,60,80,100,120 --step-counts 5 --dwell 1
+scripts/rosaia.sh sweep --axis 1 --encoder-sign -1 --pwm 100 \
+  --points 0,20,40,60,80,100,120 --step-counts 5 --dwell 1
+```
+
+The sweep visits the increasing targets and then the reversed sequence,
+finishing at zero. It aborts on stale telemetry, firmware faults, an out-of-
+range target, or a step timeout. Only one arm is excited per session.
 
 The first arm-1 calibration cycle uses a 10 s trapezoid: 3 s acceleration,
 4 s at 30 counts/s and 3 s deceleration, followed by a 1 s dwell and a mirrored

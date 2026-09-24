@@ -65,6 +65,9 @@ class SessionRecorder(Node):
         self.declare_parameter('encoder_signs', [1, -1])
         self.declare_parameter('maximum_telemetry_age_ms', 100.0)
         self.declare_parameter('flush_every_rows', 30)
+        self.declare_parameter('motor_supply_voltage_v', 5.6)
+        self.declare_parameter('motor_supply_current_limit_a', -1.0)
+        self.declare_parameter('motor_supply_source', '5.6 V transformer')
 
         names = [
             str(value) for value in self.get_parameter('arm_names').value
@@ -132,6 +135,19 @@ class SessionRecorder(Node):
             'schema_version': 5,
             'created_local': datetime.now().astimezone().isoformat(),
             'host': platform.node(),
+            'motor_supply': {
+                'voltage_v': float(
+                    self.get_parameter('motor_supply_voltage_v').value
+                ),
+                'current_limit_a': float(
+                    self.get_parameter(
+                        'motor_supply_current_limit_a'
+                    ).value
+                ),
+                'source': str(
+                    self.get_parameter('motor_supply_source').value
+                ),
+            },
             'arms': [
                 {
                     'name': name,

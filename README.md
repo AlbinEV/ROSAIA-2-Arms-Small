@@ -78,6 +78,10 @@ Record a named synchronized experiment session with:
 scripts/rosaia.sh recorder calibration_01
 ```
 
+Generate a controlled quasi-static dataset using firmware-bounded encoder
+steps with `scripts/rosaia.sh sweep`. The recorder and sweep run in separate
+terminals so the raw data stream starts before actuation.
+
 The helper `scripts/rosaia.sh` also provides build, test, bridge, vision,
 excitation generation, MLP training, learned-Jacobian inference, status,
 preview, visualization, and stop commands.

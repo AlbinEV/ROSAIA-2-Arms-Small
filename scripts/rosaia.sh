@@ -27,6 +27,7 @@ Commands:
   audit [ARGS]          Audit recorded sessions before MLP training
   excitation [ARGS]     Generate a non-actuating step/Fourier reference CSV
   profile [ARGS]        Execute a return-home encoder-velocity profile
+  sweep [ARGS]          Execute a quasi-static firmware-bounded encoder sweep
   train [ARGS]          Train one MLP from complete recorded sessions
   jacobian [ARGS]       Publish learned Jacobians from encoder positions
   controller            Start the non-actuating shape controller
@@ -83,6 +84,10 @@ case "$command" in
   profile)
     source_ros
     exec ros2 run rosaia_learning play_velocity_profile "$@"
+    ;;
+  sweep)
+    cd "$REPO_ROOT"
+    exec "$REPO_ROOT/scripts/run_quasistatic_sweep.sh" "$@"
     ;;
   train)
     source_ros
